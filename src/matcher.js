@@ -52,11 +52,15 @@ function weightedOverlap(queryTokens, candidateTokens) {
 
 function numericCompatibility(queryTokens, candidateTokens) {
   const qNums = queryTokens.filter(t => /\d/.test(t));
-  if (!qNums.length) return 0;
+  if (!qNums.length) return { match:0, conflict:false };
   const cNums = new Set(candidateTokens.filter(t => /\d/.test(t)));
+  if (!cNums.size) return { match:0, conflict:false };
   let matched = 0;
   for (const n of qNums) if (cNums.has(n)) matched++;
-  return matched / qNums.length;
+  return {
+    match: matched / qNums.length,
+    conflict: matched === 0
+  };
 }
 
 function aliasScore(queryNorm, queryTokens, aliases) {
@@ -91,7 +95,8 @@ export function matchCatalog(query, catalog, limit = 8) {
     let score = Math.max(nameScore, aScore * 0.97);
     if (queryNorm === nameNorm) score = 1;
     if (nameNorm.includes(queryNorm) && queryNorm.length >= 5) score = Math.max(score, 0.91);
-    if (numeric > 0) score = Math.min(1, score + numeric * 0.13);
+    if (numeric.match > 0) score = Math.min(1, score + numeric.match * 0.16);
+    if (numeric.conflict && aScore < 0.95) score *= 0.62;
 
     if (score >= 0.16) scored.push({ ...item, score: Math.round(score * 1000) / 1000 });
   }
