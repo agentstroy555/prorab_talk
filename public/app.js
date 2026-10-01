@@ -33,6 +33,9 @@ let speechStarted = false;
 let silentSince = null;
 let recordingPurpose = null;
 let clarifyingRowId = null;
+let resumeContinuousAfterClarify = false;
+let pendingClarifyRowId = null;
+let discardStoppedSegment = false;
 
 const SILENCE_MS = 1250;
 const RMS_THRESHOLD = 0.025;
@@ -244,12 +247,40 @@ async function startContinuous() {
 }
 
 async function startClarify(rowId) {
-  if (recorder && recorder.state === "recording") {
-    toast("Сначала завершите текущую запись");
+  const currentPurpose = recordingPurpose?.type;
+  const live = recorder?.state === "recording";
+
+  if (live && currentPurpose === "clarify") {
+    if (recordingPurpose.rowId === rowId) return;
+    toast("Сначала договорите текущее уточнение");
     return;
   }
-  continuous = false;
+
   clarifyingRowId = rowId;
+  const mainSessionActive = continuous || (live && currentPurpose === "new");
+
+  if (mainSessionActive) {
+    resumeContinuousAfterClarify = true;
+    continuous = false;
+    pendingClarifyRowId = rowId;
+
+    if (live && currentPurpose === "new") {
+      discardStoppedSegment = !speechStarted;
+      updateVoiceUi();
+      finalizeSegment();
+      return;
+    }
+
+    await ensureStream();
+    pendingClarifyRowId = null;
+    beginRecorder({ type:"clarify", rowId });
+    return;
+  }
+
+  resumeContinuousAfterClarify = false;
+  pendingClarifyRowId = null;
+  discardStoppedSegment = false;
+  continuous = false;
   await ensureStream();
   beginRecorder({ type:"clarify", rowId });
   updateVoiceUi();
@@ -320,6 +351,9 @@ function nextLine() {
 
 function stopRecording() {
   continuous = false;
+  resumeContinuousAfterClarify = false;
+  pendingClarifyRowId = null;
+  discardStoppedSegment = false;
   if (recorder?.state === "recording") recorder.stop();
   else closeStream();
   updateVoiceUi();
@@ -333,8 +367,11 @@ async function onRecorderStop() {
   recorder = null;
   chunks = [];
 
+  const discardThisSegment = purpose?.type === "new" && discardStoppedSegment;
+  if (discardThisSegment) discardStoppedSegment = false;
+
   let targetRow = null;
-  if (purpose?.type === "new") {
+  if (purpose?.type === "new" && !discardThisSegment) {
     targetRow = newRow("Распознаём…");
     targetRow.pending = true;
     rows.push(targetRow);
@@ -345,7 +382,19 @@ async function onRecorderStop() {
     render();
   }
 
-  if (continuous) {
+  if (purpose?.type === "new" && pendingClarifyRowId) {
+    const rowId = pendingClarifyRowId;
+    pendingClarifyRowId = null;
+    setTimeout(() => {
+      if (stream?.active && !recorder) beginRecorder({ type:"clarify", rowId });
+    }, 80);
+  } else if (purpose?.type === "clarify" && resumeContinuousAfterClarify) {
+    resumeContinuousAfterClarify = false;
+    continuous = true;
+    setTimeout(() => {
+      if (continuous && stream?.active && !recorder) beginRecorder({ type:"new" });
+    }, 120);
+  } else if (continuous) {
     setTimeout(() => {
       if (continuous && stream?.active && !recorder) beginRecorder({ type:"new" });
     }, 120);
@@ -396,16 +445,26 @@ function closeStream() {
 
 function updateVoiceUi() {
   const live = recorder?.state === "recording";
+  const switchingToClarify = Boolean(pendingClarifyRowId);
   micPulse.classList.toggle("live", live);
   nextButton.disabled = !live || recordingPurpose?.type === "clarify";
-  stopButton.disabled = !live && !continuous;
-  startButton.disabled = live || continuous;
-  if (live && recordingPurpose?.type === "clarify") {
+  stopButton.disabled = !live && !continuous && !switchingToClarify && !resumeContinuousAfterClarify;
+  startButton.disabled = live || continuous || switchingToClarify || resumeContinuousAfterClarify;
+
+  if (switchingToClarify && !live) {
+    voiceTitle.textContent = "Переключаюсь на уточнение";
+    voiceHint.textContent = "Основной ввод продолжится автоматически после уточнения.";
+  } else if (live && recordingPurpose?.type === "clarify") {
     voiceTitle.textContent = "Говорите уточнение";
-    voiceHint.textContent = "Пауза завершит уточнение выбранной строки.";
+    voiceHint.textContent = resumeContinuousAfterClarify
+      ? "Пауза применит уточнение, затем основной ввод продолжится."
+      : "Пауза завершит уточнение выбранной строки.";
   } else if (live) {
     voiceTitle.textContent = "Слушаю текущую позицию";
     voiceHint.textContent = "Пауза создаст строку автоматически.";
+  } else if (continuous) {
+    voiceTitle.textContent = "Продолжаю голосовой ввод";
+    voiceHint.textContent = "Готовлю следующую строку.";
   } else {
     voiceTitle.textContent = "Микрофон выключен";
     voiceHint.textContent = "Начните диктовку или добавьте позицию вручную.";
