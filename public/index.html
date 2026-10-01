@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b63f6">
+  <title>Прораб Talk</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">П</div>
+      <div>
+        <strong>Прораб Talk</strong>
+        <span>Заявка на материалы голосом</span>
+      </div>
+    </div>
+    <button id="catalogButton" class="icon-button" type="button" title="Номенклатура" aria-label="Открыть номенклатуру">
+      ☷
+    </button>
+  </header>
+
+  <main class="page">
+    <section class="intro card">
+      <div>
+        <div class="eyebrow">MVP · голосовой ввод</div>
+        <h1>Диктуйте по одной позиции</h1>
+        <p>Скажите материал и количество. Сделайте паузу — появится новая строка. Если пауза была лишней, нажмите синий <b>+</b> между строками.</p>
+      </div>
+      <div id="apiStatus" class="status">Проверяем сервис…</div>
+    </section>
+
+    <section class="voice card">
+      <div class="voice-state">
+        <div id="micPulse" class="mic-pulse">●</div>
+        <div>
+          <strong id="voiceTitle">Микрофон выключен</strong>
+          <span id="voiceHint">Начните диктовку или добавьте позицию вручную.</span>
+        </div>
+      </div>
+      <div class="voice-actions">
+        <button id="startButton" class="button primary" type="button">🎙 Продолжить голосовой ввод</button>
+        <button id="nextButton" class="button" type="button" disabled>Следующая строка</button>
+        <button id="stopButton" class="button danger" type="button" disabled>Стоп</button>
+      </div>
+    </section>
+
+    <section class="request-section">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow">Текущая заявка</div>
+          <h2>Позиции</h2>
+        </div>
+        <button id="addManualButton" class="button ghost" type="button">+ Добавить вручную</button>
+      </div>
+
+      <div class="desktop-head row-grid">
+        <span></span>
+        <span>Распознанный текст</span>
+        <span>Номенклатура</span>
+        <span>Кол-во</span>
+        <span>Ед.</span>
+        <span></span>
+      </div>
+
+      <div id="rows" class="rows"></div>
+
+      <div id="emptyState" class="empty">
+        <div class="empty-icon">🎙</div>
+        <strong>Пока нет позиций</strong>
+        <span>Нажмите «Продолжить голосовой ввод» и продиктуйте первую строку.</span>
+      </div>
+
+      <div class="save-bar">
+        <span id="saveState"></span>
+        <button id="saveButton" class="button primary" type="button">Сохранить заявку</button>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="catalogDialog" class="dialog">
+    <div class="dialog-head">
+      <div>
+        <div class="eyebrow">Справочник</div>
+        <h2>Номенклатура</h2>
+      </div>
+      <button class="icon-button close-dialog" type="button">×</button>
+    </div>
+    <div id="catalogText" class="catalog-text">Загрузка…</div>
+  </dialog>
+
+  <dialog id="pickerDialog" class="dialog picker">
+    <div class="dialog-head">
+      <div>
+        <div class="eyebrow">Ручной выбор</div>
+        <h2>Найти номенклатуру</h2>
+      </div>
+      <button class="icon-button close-dialog" type="button">×</button>
+    </div>
+    <input id="pickerSearch" class="picker-search" placeholder="Начните вводить название…" autocomplete="off">
+    <div id="pickerResults" class="picker-results"></div>
+  </dialog>
+
+  <div id="toast" class="toast"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
