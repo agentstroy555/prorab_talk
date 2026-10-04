@@ -132,7 +132,7 @@ function watchLevel(){
 function setSilenceProgress(p){nextButton.style.setProperty("--silence-progress",String(p))}
 function finalizeSegment(){if(recorder?.state!=="recording")return;cancelAnimationFrame(animationFrame);recorder.stop()}
 function nextLine(){if(recorder?.state==="recording"&&recordingPurpose?.type==="new")finalizeSegment()}
-function stopAll(){continuous=false;pendingClarifyRowId=null;discardStoppedSegment=false;if(recorder?.state==="recording")recorder.stop();else closeStream();updateVoiceUi()}
+function stopAll(){continuous=false;pendingClarifyRowId=null;if(recordingPurpose?.type==="new")discardStoppedSegment=!speechStarted;else discardStoppedSegment=false;if(recorder?.state==="recording")recorder.stop();else closeStream();updateVoiceUi()}
 async function onRecorderStop(){
   cancelAnimationFrame(animationFrame);setSilenceProgress(0);
   const purpose=recordingPurpose,mt=recorder?.mimeType||"audio/webm",blob=new Blob(chunks,{type:mt});recorder=null;chunks=[];
