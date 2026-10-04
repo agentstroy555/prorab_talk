@@ -88,13 +88,20 @@ function trailingBareNumber(tokens, measures) {
 }
 
 export function parseLine(text, catalog) {
+  const {tokens,measures}=extractMeasures(text);
   const familyCandidates=rankFamilies(text,catalog,5);
   const familyRef=familyCandidates[0] ? catalog.families.find(f=>f.id===familyCandidates[0].id) : null;
-  const variantCandidates=rankVariants(text,familyRef,5);
+
+  const firstCount=measures.find(m=>m.kind==="count");
+  let variantTokens=firstCount ? tokens.slice(0,firstCount.start) : [...tokens];
+  if(!firstCount && measures.length && /^\d+(?:[.,]\d+)?$/.test(variantTokens.at(-1)||"")){
+    variantTokens=variantTokens.slice(0,-1);
+  }
+  const variantQuery=variantTokens.join(" ");
+  const variantCandidates=rankVariants(variantQuery,familyRef,5);
   const bestVariant=variantCandidates[0] || null;
   const selectedVariant = bestVariant && (bestVariant.score >= 0.45 || familyRef?.variants.length===1) ? bestVariant : null;
 
-  const {tokens,measures}=extractMeasures(text);
   const variantKeys=variantMeasureKeys(selectedVariant);
   let quantity=null, unit=null;
 
