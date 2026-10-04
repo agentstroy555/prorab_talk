@@ -2,107 +2,66 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0b63f6">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f5f7fb">
   <title>Прораб Talk</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <div class="brand-mark">П</div>
-      <div>
-        <strong>Прораб Talk</strong>
-        <span>Заявка на материалы голосом</span>
-      </div>
+<header class="topbar">
+  <div class="brand"><div class="brand-mark">П</div><div><strong>Прораб Talk</strong><span id="apiStatus">Проверяем сервис…</span></div></div>
+  <button id="catalogButton" class="icon-button" type="button" aria-label="Номенклатура">☷</button>
+</header>
+
+<main class="page">
+  <section class="guide">
+    <div><span class="guide-label">Говорите в порядке</span><strong>Товар <i>→</i> вариант <i>→</i> количество</strong></div>
+    <span class="guide-example">Rotband → 25 кг → 30 мешков</span>
+  </section>
+
+  <section class="request-section">
+    <div class="section-head">
+      <div><span>Текущая заявка</span><h1>Позиции</h1></div>
+      <button id="addManualButton" class="text-button" type="button">+ Вручную</button>
     </div>
-    <button id="catalogButton" class="icon-button" type="button" title="Номенклатура" aria-label="Открыть номенклатуру">
-      ☷
+    <div id="rows" class="rows"></div>
+    <div id="emptyState" class="empty">
+      <div class="empty-icon">🎙</div>
+      <strong>Нажмите Play и диктуйте</strong>
+      <span>Одна позиция: товар, затем вариант, затем количество.</span>
+    </div>
+    <div class="save-bar"><span id="saveState"></span><button id="saveButton" class="save-button" type="button">Сохранить заявку</button></div>
+  </section>
+</main>
+
+<div class="voice-dock-shell">
+  <div id="voiceDock" class="voice-dock">
+    <div id="equalizer" class="equalizer" aria-label="Уровень микрофона">
+      <i></i><i></i><i></i><i></i><i></i><i></i>
+    </div>
+    <div class="dock-state"><strong id="voiceTitle">Готов</strong><span id="voiceHint">Play — начать диктовку</span></div>
+    <button id="nextButton" class="next-button" type="button" disabled aria-label="Следующая строка">
+      <span class="next-fill"></span><span class="next-icon">→</span>
     </button>
-  </header>
+    <button id="playButton" class="play-button" type="button" aria-label="Play"><span id="playIcon">▶</span></button>
+  </div>
+</div>
 
-  <main class="page">
-    <section class="intro card">
-      <div>
-        <div class="eyebrow">MVP · голосовой ввод</div>
-        <h1>Диктуйте по одной позиции</h1>
-        <p>Скажите материал и количество. Сделайте паузу — появится новая строка. Если пауза была лишней, нажмите синий <b>+</b> между строками.</p>
-      </div>
-      <div id="apiStatus" class="status">Проверяем сервис…</div>
-    </section>
+<dialog id="catalogDialog" class="dialog">
+  <div class="dialog-head"><div><span>Справочник</span><h2>Номенклатура</h2></div><button class="icon-button close-dialog" type="button">×</button></div>
+  <div id="catalogText" class="catalog-text">Загрузка…</div>
+</dialog>
 
-    <section class="voice card">
-      <div class="voice-state">
-        <div id="micPulse" class="mic-pulse">●</div>
-        <div>
-          <strong id="voiceTitle">Микрофон выключен</strong>
-          <span id="voiceHint">Начните диктовку или добавьте позицию вручную.</span>
-        </div>
-      </div>
-      <div class="voice-actions">
-        <button id="startButton" class="button primary" type="button">🎙 Продолжить голосовой ввод</button>
-        <button id="nextButton" class="button" type="button" disabled>Следующая строка</button>
-        <button id="stopButton" class="button danger" type="button" disabled>Стоп</button>
-      </div>
-    </section>
+<dialog id="segmentDialog" class="dialog segment-dialog">
+  <div class="dialog-head"><div><span id="segmentKicker">Исправить</span><h2 id="segmentTitle">Выберите вариант</h2></div><button class="icon-button close-dialog" type="button">×</button></div>
+  <div id="segmentOptions" class="segment-options"></div>
+  <div id="manualWrap" class="manual-wrap" hidden>
+    <input id="manualInput" class="field" autocomplete="off" placeholder="Введите вручную">
+    <button id="manualSave" class="save-button" type="button">Готово</button>
+  </div>
+</dialog>
 
-    <section class="request-section">
-      <div class="section-head">
-        <div>
-          <div class="eyebrow">Текущая заявка</div>
-          <h2>Позиции</h2>
-        </div>
-        <button id="addManualButton" class="button ghost" type="button">+ Добавить вручную</button>
-      </div>
-
-      <div class="desktop-head row-grid">
-        <span></span>
-        <span>Распознанный текст</span>
-        <span>Номенклатура</span>
-        <span>Кол-во</span>
-        <span>Ед.</span>
-        <span></span>
-      </div>
-
-      <div id="rows" class="rows"></div>
-
-      <div id="emptyState" class="empty">
-        <div class="empty-icon">🎙</div>
-        <strong>Пока нет позиций</strong>
-        <span>Нажмите «Продолжить голосовой ввод» и продиктуйте первую строку.</span>
-      </div>
-
-      <div class="save-bar">
-        <span id="saveState"></span>
-        <button id="saveButton" class="button primary" type="button">Сохранить заявку</button>
-      </div>
-    </section>
-  </main>
-
-  <dialog id="catalogDialog" class="dialog">
-    <div class="dialog-head">
-      <div>
-        <div class="eyebrow">Справочник</div>
-        <h2>Номенклатура</h2>
-      </div>
-      <button class="icon-button close-dialog" type="button">×</button>
-    </div>
-    <div id="catalogText" class="catalog-text">Загрузка…</div>
-  </dialog>
-
-  <dialog id="pickerDialog" class="dialog picker">
-    <div class="dialog-head">
-      <div>
-        <div class="eyebrow">Ручной выбор</div>
-        <h2>Найти номенклатуру</h2>
-      </div>
-      <button class="icon-button close-dialog" type="button">×</button>
-    </div>
-    <input id="pickerSearch" class="picker-search" placeholder="Начните вводить название…" autocomplete="off">
-    <div id="pickerResults" class="picker-results"></div>
-  </dialog>
-
-  <div id="toast" class="toast"></div>
-  <script type="module" src="/app.js"></script>
+<div id="toast" class="toast"></div>
+<script type="module" src="/app.js"></script>
 </body>
 </html>

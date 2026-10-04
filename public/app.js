@@ -1,542 +1,175 @@
-const rowsEl = document.querySelector("#rows");
-const emptyState = document.querySelector("#emptyState");
-const startButton = document.querySelector("#startButton");
-const nextButton = document.querySelector("#nextButton");
-const stopButton = document.querySelector("#stopButton");
-const addManualButton = document.querySelector("#addManualButton");
-const saveButton = document.querySelector("#saveButton");
-const saveState = document.querySelector("#saveState");
-const micPulse = document.querySelector("#micPulse");
-const voiceTitle = document.querySelector("#voiceTitle");
-const voiceHint = document.querySelector("#voiceHint");
-const apiStatus = document.querySelector("#apiStatus");
-const catalogButton = document.querySelector("#catalogButton");
-const catalogDialog = document.querySelector("#catalogDialog");
-const catalogText = document.querySelector("#catalogText");
-const pickerDialog = document.querySelector("#pickerDialog");
-const pickerSearch = document.querySelector("#pickerSearch");
-const pickerResults = document.querySelector("#pickerResults");
-const toastEl = document.querySelector("#toast");
+const $=s=>document.querySelector(s);
+const rowsEl=$("#rows"),emptyState=$("#emptyState"),addManualButton=$("#addManualButton"),saveButton=$("#saveButton"),saveState=$("#saveState");
+const apiStatus=$("#apiStatus"),catalogButton=$("#catalogButton"),catalogDialog=$("#catalogDialog"),catalogText=$("#catalogText");
+const segmentDialog=$("#segmentDialog"),segmentOptions=$("#segmentOptions"),segmentTitle=$("#segmentTitle"),segmentKicker=$("#segmentKicker"),manualWrap=$("#manualWrap"),manualInput=$("#manualInput"),manualSave=$("#manualSave");
+const toastEl=$("#toast"),voiceDock=$("#voiceDock"),equalizer=$("#equalizer"),nextButton=$("#nextButton"),playButton=$("#playButton"),playIcon=$("#playIcon"),voiceTitle=$("#voiceTitle"),voiceHint=$("#voiceHint");
 
-let rows = [];
-let catalog = [];
-let rowSeq = 0;
-let pickerRowId = null;
-let continuous = false;
-let stream = null;
-let recorder = null;
-let chunks = [];
-let analyser = null;
-let audioContext = null;
-let animationFrame = null;
-let speechStarted = false;
-let silentSince = null;
-let recordingPurpose = null;
-let clarifyingRowId = null;
-let resumeContinuousAfterClarify = false;
-let pendingClarifyRowId = null;
-let discardStoppedSegment = false;
+let rows=[],catalog=[],families=[],rowSeq=0;
+let continuous=false,stream=null,recorder=null,chunks=[],analyser=null,audioContext=null,animationFrame=null,speechStarted=false,silentSince=null,recordingPurpose=null;
+let pendingClarifyRowId=null,discardStoppedSegment=false,segmentContext=null;
+const SILENCE_MS=650,RMS_THRESHOLD=.025;
 
-const SILENCE_MS = 1250;
-const RMS_THRESHOLD = 0.025;
-
-function toast(message) {
-  toastEl.textContent = message;
-  toastEl.classList.add("show");
-  clearTimeout(toastEl._timer);
-  toastEl._timer = setTimeout(() => toastEl.classList.remove("show"), 2300);
+function toast(message){toastEl.textContent=message;toastEl.classList.add("show");clearTimeout(toastEl._t);toastEl._t=setTimeout(()=>toastEl.classList.remove("show"),2200)}
+async function api(url,options={}){const r=await fetch(url,options);const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.details||d.error||"Ошибка запроса");return d}
+async function bootstrap(){
+  [catalog,families]=await Promise.all([api("/api/catalog?limit=1000"),api("/api/families")]);
+  catalogText.textContent=catalog.map(x=>x.name).join("\n");
+  try{const h=await api("/api/health");apiStatus.textContent="готово · "+h.catalog+" SKU";apiStatus.style.color="var(--green)"}catch{apiStatus.textContent="сервис недоступен";apiStatus.style.color="var(--danger)"}
 }
-
-async function api(url, options = {}) {
-  const response = await fetch(url, options);
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.details || data.error || "Ошибка запроса");
-  return data;
-}
-
-async function loadCatalog() {
-  catalog = await api("/api/catalog?limit=1000");
-  catalogText.textContent = catalog.map(x => x.name).join("\n");
-}
-
-async function health() {
-  try {
-    const result = await api("/api/health");
-    apiStatus.textContent = "Сервис готов · " + result.catalog + " позиций";
-    apiStatus.className = "status ok";
-  } catch {
-    apiStatus.textContent = "Сервис недоступен";
-    apiStatus.className = "status bad";
-  }
-}
-
-function newRow(text = "") {
-  return {
-    id: ++rowSeq,
-    rawText: text,
-    text,
-    candidates: [],
-    catalogItemId: null,
-    catalogItemName: "",
-    quantity: "",
-    unit: "",
-    pending: false
-  };
-}
-
-function render() {
-  rowsEl.innerHTML = "";
-  emptyState.hidden = rows.length > 0;
-
-  rows.forEach((row, index) => {
-    if (index > 0) {
-      const merge = document.createElement("div");
-      merge.className = "merge-wrap";
-      merge.innerHTML = '<button class="merge-button" type="button" title="Склеить соседние строки">+</button>';
-      merge.querySelector("button").onclick = () => mergeRows(index - 1, index);
-      rowsEl.appendChild(merge);
-    }
-
-    const el = document.createElement("div");
-    el.className = "request-row row-grid" + (row.pending ? " pending" : "");
-    const options = row.candidates.length
-      ? row.candidates.map((c, i) => '<option value="' + escapeHtml(c.id) + '"' + (c.id === row.catalogItemId ? " selected" : "") + '>' + escapeHtml(c.name) + (i === 0 ? " · лучший" : "") + '</option>').join("")
-      : '<option value="">Не удалось определить</option>';
-
-    el.innerHTML =
-      '<button class="button clarify" type="button">🎙 Уточнить</button>' +
-      '<input class="field text-field" value="' + escapeHtml(row.text) + '" placeholder="Например: ротбанд двадцать мешков">' +
-      '<div class="catalog-field"><select class="field catalog-select">' + options + '<option value="__catalog__">Найти в полном каталоге…</option></select>' +
-      '<span class="confidence">' + confidenceLabel(row) + '</span></div>' +
-      '<input class="field qty-field" inputmode="decimal" value="' + escapeHtml(row.quantity) + '" placeholder="0">' +
-      '<input class="field unit-field" value="' + escapeHtml(row.unit) + '" placeholder="шт">' +
-      '<button class="delete-row" type="button" title="Удалить">×</button>';
-
-    const textInput = el.querySelector(".text-field");
-    let debounce;
-    textInput.oninput = () => {
-      row.text = textInput.value;
-      clearTimeout(debounce);
-      debounce = setTimeout(() => rematch(row.id), 350);
-    };
-    el.querySelector(".qty-field").oninput = e => row.quantity = e.target.value;
-    el.querySelector(".unit-field").oninput = e => row.unit = e.target.value;
-    el.querySelector(".delete-row").onclick = () => {
-      rows = rows.filter(x => x.id !== row.id);
-      render();
-    };
-    el.querySelector(".clarify").onclick = () => startClarify(row.id);
-    el.querySelector(".catalog-select").onchange = e => {
-      if (e.target.value === "__catalog__") {
-        openPicker(row.id);
-        e.target.value = row.catalogItemId || "";
-        return;
-      }
-      const candidate = row.candidates.find(c => c.id === e.target.value);
-      if (candidate) {
-        row.catalogItemId = candidate.id;
-        row.catalogItemName = candidate.name;
-      }
-    };
+function newRow(text=""){return{id:++rowSeq,rawText:text,text,familyId:null,familyName:"",familyCandidates:[],variantId:null,variantLabel:"",variantCandidates:[],catalogItemId:null,catalogItemName:"",quantity:"",unit:"",orderUnit:"",pending:false}}
+function esc(v){return String(v??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;")}
+function confidence(row){if(row.pending)return"Распознаём…";const f=row.familyCandidates?.[0];if(!f)return"Товар пока не определён";const p=Math.round((f.score||0)*100);return p>=80?"Уверенно · "+p+"%":p>=55?"Проверьте · "+p+"%":"Низкая уверенность · "+p+"%"}
+function render(){
+  rowsEl.innerHTML="";emptyState.hidden=rows.length>0;
+  rows.forEach((row,index)=>{
+    if(index>0){const m=document.createElement("div");m.className="merge-wrap";m.innerHTML='<button class="merge-button" type="button">+</button>';m.firstChild.onclick=()=>mergeRows(index-1,index);rowsEl.appendChild(m)}
+    const el=document.createElement("article");el.className="request-row"+(row.pending?" pending":"");
+    el.innerHTML='<div class="row-top"><input class="field text-field" value="'+esc(row.text)+'" placeholder="Товар, вариант, количество"><button class="row-action clarify" type="button" title="Уточнить">🎙</button><button class="row-action delete-row" type="button">×</button></div>'+
+      '<div class="segments">'+segmentHtml("family","Товар",row.familyName||"Не определён",!row.familyName)+segmentHtml("variant","Вариант",row.variantLabel||"Не определён",!row.variantLabel)+'</div>'+
+      '<div class="qty-unit"><input class="field qty-input" inputmode="decimal" value="'+esc(row.quantity)+'" placeholder="Количество"><button class="unit-button" type="button"><small>Ед.</small><strong>'+esc(row.unit||row.orderUnit||"—")+'</strong></button></div>'+
+      '<div class="confidence">'+esc(confidence(row))+'</div>';
+    let timer;const textInput=el.querySelector(".text-field");
+    textInput.oninput=()=>{row.text=textInput.value;clearTimeout(timer);timer=setTimeout(()=>rematch(row.id),320)};
+    el.querySelector(".clarify").onclick=()=>startClarify(row.id).catch(e=>toast(e.message));
+    el.querySelector(".delete-row").onclick=()=>{rows=rows.filter(x=>x.id!==row.id);render()};
+    el.querySelector('[data-segment="family"]').onclick=()=>openSegment(row.id,"family");
+    el.querySelector('[data-segment="variant"]').onclick=()=>openSegment(row.id,"variant");
+    el.querySelector(".qty-input").oninput=e=>row.quantity=e.target.value;
+    el.querySelector(".unit-button").onclick=()=>openSegment(row.id,"unit");
     rowsEl.appendChild(el);
   });
 }
-
-function confidenceLabel(row) {
-  if (row.pending) return "Распознаём…";
-  const top = row.candidates[0];
-  if (!top) return "Нет уверенного совпадения";
-  const percent = Math.round(top.score * 100);
-  if (percent >= 85) return "Высокая уверенность · " + percent + "%";
-  if (percent >= 60) return "Проверьте совпадение · " + percent + "%";
-  return "Низкая уверенность · " + percent + "%";
+function segmentHtml(type,label,value,empty){return '<button class="segment '+(empty?"empty":"")+'" data-segment="'+type+'" type="button"><small>'+label+'</small><strong>'+esc(value)+'</strong></button>'}
+function applyParsed(row,data){
+  row.familyCandidates=data.familyCandidates||[];
+  row.variantCandidates=data.variantCandidates||[];
+  row.familyId=data.family?.id||null;row.familyName=data.family?.name||"";
+  row.variantId=data.variant?.id||null;row.variantLabel=data.variant?.label||"";
+  row.catalogItemId=data.variant?.id||null;row.catalogItemName=data.variant?.fullName||"";
+  row.orderUnit=data.orderUnit||data.family?.orderUnit||"";
+  if(data.quantity!==null&&data.quantity!==undefined)row.quantity=data.quantity;
+  if(data.unit)row.unit=data.unit;else if(!row.unit&&row.orderUnit)row.unit=row.orderUnit;
+  row.pending=false;
 }
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+async function rematch(id){const row=rows.find(x=>x.id===id);if(!row)return;try{const d=await api("/api/match",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:row.text})});applyParsed(row,d);render()}catch(e){toast(e.message)}}
+async function mergeRows(newerIndex,olderIndex){
+  const newer=rows[newerIndex],older=rows[olderIndex];if(!newer||!older)return;
+  newer.text=[older.text,newer.text].filter(Boolean).join(" ").replace(/\s+/g," ").trim();
+  newer.rawText=[older.rawText,newer.rawText].filter(Boolean).join(" ").trim();
+  newer.pending=true;rows.splice(olderIndex,1);render();await rematch(newer.id);
 }
+function addManual(){const r=newRow("");rows.unshift(r);render();setTimeout(()=>rowsEl.querySelector(".text-field")?.focus(),0)}
 
-function applyMatch(row, data, append = false) {
-  const transcript = String(data.text || "").trim();
-  if (append && transcript) {
-    row.text = [row.text, transcript].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
-    row.rawText = row.rawText || row.text;
-  } else if (transcript) {
-    row.text = transcript;
-    row.rawText = data.rawText || transcript;
+function optionsFor(row,type){
+  if(type==="family")return (row.familyCandidates||[]).slice(0,3).map(x=>({value:x.id,label:x.name,sub:x.category}));
+  if(type==="variant"){
+    let vs=row.variantCandidates||[];
+    if(!vs.length&&row.familyId){const f=families.find(x=>x.id===row.familyId);vs=(f?.variants||[]).slice(0,3).map(v=>({...v,score:0}))}
+    return vs.slice(0,3).map(x=>({value:x.id,label:x.label,sub:x.fullName}));
   }
-
-  row.quantity = data.quantity ?? row.quantity ?? "";
-  row.unit = data.unit ?? row.unit ?? "";
-  row.candidates = data.candidates || [];
-  const top = row.candidates[0];
-  if (top) {
-    row.catalogItemId = top.id;
-    row.catalogItemName = top.name;
-  } else {
-    row.catalogItemId = null;
-    row.catalogItemName = "";
-  }
-  row.pending = false;
+  const units=[row.unit,row.orderUnit,"шт","мешок","лист","рулон","кг","м"].filter(Boolean);
+  return [...new Set(units)].slice(0,6).map(x=>({value:x,label:x,sub:"Единица заказа"}));
 }
-
-async function rematch(rowId) {
-  const row = rows.find(x => x.id === rowId);
-  if (!row) return;
-  try {
-    const data = await api("/api/match", {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body:JSON.stringify({ text:row.text })
-    });
-    applyMatch(row, data);
-    render();
-  } catch (error) {
-    toast(error.message);
-  }
+function openSegment(rowId,type){
+  const row=rows.find(x=>x.id===rowId);if(!row)return;segmentContext={rowId,type};manualWrap.hidden=true;manualInput.value="";
+  segmentKicker.textContent=type==="family"?"Товар":type==="variant"?"Вариант SKU":"Единица";
+  segmentTitle.textContent="Выберите или введите вручную";
+  const opts=optionsFor(row,type);
+  segmentOptions.innerHTML=opts.map(o=>'<button class="option-button" data-value="'+esc(o.value)+'"><b>'+esc(o.label)+'</b><span>'+esc(o.sub||"")+'</span></button>').join("")+'<button class="option-button manual-choice"><b>Ввести вручную</b><span>Свое значение</span></button>';
+  segmentOptions.querySelectorAll("[data-value]").forEach(b=>b.onclick=()=>selectSegment(b.dataset.value));
+  segmentOptions.querySelector(".manual-choice").onclick=()=>{manualWrap.hidden=false;manualInput.focus()};
+  segmentDialog.showModal();
 }
-
-async function mergeRows(firstIndex, secondIndex) {
-  const first = rows[firstIndex];
-  const second = rows[secondIndex];
-  if (!first || !second) return;
-  first.text = [first.text, second.text].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
-  first.rawText = [first.rawText, second.rawText].filter(Boolean).join(" ").trim();
-  rows.splice(secondIndex, 1);
-  first.pending = true;
-  render();
-  await rematch(first.id);
+function selectSegment(value){
+  const row=rows.find(x=>x.id===segmentContext?.rowId);if(!row)return;
+  const type=segmentContext.type;
+  if(type==="family"){
+    const f=families.find(x=>x.id===value);if(f){row.familyId=f.id;row.familyName=f.name;row.orderUnit=f.orderUnit;row.unit=row.unit||f.orderUnit;row.familyCandidates=[{id:f.id,name:f.name,category:f.category,orderUnit:f.orderUnit,score:1},...row.familyCandidates.filter(x=>x.id!==f.id)];row.variantId=null;row.variantLabel="";row.variantCandidates=(f.variants||[]).slice(0,5).map(v=>({...v,familyId:f.id,familyName:f.name,orderUnit:f.orderUnit,score:0}))}
+  }else if(type==="variant"){
+    const f=families.find(x=>x.id===row.familyId);const v=f?.variants.find(x=>x.id===value);if(v){row.variantId=v.id;row.variantLabel=v.label;row.catalogItemId=v.id;row.catalogItemName=v.fullName}
+  }else row.unit=value;
+  segmentDialog.close();render();
 }
+manualSave.onclick=()=>{
+  const row=rows.find(x=>x.id===segmentContext?.rowId),value=manualInput.value.trim();if(!row||!value)return;
+  if(segmentContext.type==="family"){row.familyId=null;row.familyName=value;row.variantId=null;row.variantLabel=""}
+  else if(segmentContext.type==="variant"){row.variantId=null;row.variantLabel=value;row.catalogItemId=null;row.catalogItemName=""}
+  else row.unit=value;
+  segmentDialog.close();render();
+};
 
-function addManual() {
-  const row = newRow("");
-  rows.push(row);
-  render();
-  setTimeout(() => {
-    const inputs = rowsEl.querySelectorAll(".text-field");
-    inputs[inputs.length - 1]?.focus();
-  }, 0);
+async function ensureStream(){if(stream?.active)return stream;stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});return stream}
+function mime(){return["audio/webm;codecs=opus","audio/webm","audio/mp4"].find(x=>MediaRecorder.isTypeSupported(x))||""}
+async function startMain(){
+  if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw new Error("Браузер не поддерживает запись");
+  continuous=true;await ensureStream();beginRecorder({type:"new"});updateVoiceUi();
 }
-
-async function ensureStream() {
-  if (stream && stream.active) return stream;
-  stream = await navigator.mediaDevices.getUserMedia({
-    audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true }
-  });
-  return stream;
+async function startClarify(rowId){
+  const live=recorder?.state==="recording";
+  if(live&&recordingPurpose?.type==="clarify")return toast("Сначала завершите текущее уточнение");
+  continuous=false;pendingClarifyRowId=rowId;
+  if(live&&recordingPurpose?.type==="new"){discardStoppedSegment=!speechStarted;finalizeSegment();updateVoiceUi();return}
+  await ensureStream();pendingClarifyRowId=null;beginRecorder({type:"clarify",rowId});updateVoiceUi();
 }
-
-function pickMimeType() {
-  const types = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
-  return types.find(t => MediaRecorder.isTypeSupported(t)) || "";
+function beginRecorder(purpose){
+  recordingPurpose=purpose;chunks=[];speechStarted=false;silentSince=null;setSilenceProgress(0);
+  const mt=mime();recorder=mt?new MediaRecorder(stream,{mimeType:mt}):new MediaRecorder(stream);
+  recorder.ondataavailable=e=>{if(e.data?.size)chunks.push(e.data)};recorder.onstop=onRecorderStop;recorder.start(200);watchLevel();updateVoiceUi();
 }
-
-async function startContinuous() {
-  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-    toast("Браузер не поддерживает запись аудио");
-    return;
-  }
-  continuous = true;
-  await ensureStream();
-  beginRecorder({ type:"new" });
-  updateVoiceUi();
-}
-
-async function startClarify(rowId) {
-  const currentPurpose = recordingPurpose?.type;
-  const live = recorder?.state === "recording";
-
-  if (live && currentPurpose === "clarify") {
-    if (recordingPurpose.rowId === rowId) return;
-    toast("Сначала договорите текущее уточнение");
-    return;
-  }
-
-  clarifyingRowId = rowId;
-  const mainSessionActive = continuous || (live && currentPurpose === "new");
-
-  if (mainSessionActive) {
-    resumeContinuousAfterClarify = true;
-    continuous = false;
-    pendingClarifyRowId = rowId;
-
-    if (live && currentPurpose === "new") {
-      discardStoppedSegment = !speechStarted;
-      updateVoiceUi();
-      finalizeSegment();
-      return;
-    }
-
-    await ensureStream();
-    pendingClarifyRowId = null;
-    beginRecorder({ type:"clarify", rowId });
-    return;
-  }
-
-  resumeContinuousAfterClarify = false;
-  pendingClarifyRowId = null;
-  discardStoppedSegment = false;
-  continuous = false;
-  await ensureStream();
-  beginRecorder({ type:"clarify", rowId });
-  updateVoiceUi();
-}
-
-function beginRecorder(purpose) {
-  if (!stream?.active) return;
-  recordingPurpose = purpose;
-  chunks = [];
-  speechStarted = false;
-  silentSince = null;
-
-  const mimeType = pickMimeType();
-  recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-  recorder.ondataavailable = event => {
-    if (event.data?.size) chunks.push(event.data);
-  };
-  recorder.onstop = onRecorderStop;
-  recorder.start(250);
-  startSilenceWatcher();
-  updateVoiceUi();
-}
-
-function startSilenceWatcher() {
+function watchLevel(){
   cancelAnimationFrame(animationFrame);
-  if (!audioContext) {
-    audioContext = new AudioContext();
-    analyser = audioContext.createAnalyser();
-    analyser.fftSize = 1024;
-    audioContext.createMediaStreamSource(stream).connect(analyser);
-  }
-
-  const data = new Uint8Array(analyser.fftSize);
-  const tick = () => {
-    if (!recorder || recorder.state !== "recording") return;
-    analyser.getByteTimeDomainData(data);
-    let sum = 0;
-    for (const value of data) {
-      const sample = (value - 128) / 128;
-      sum += sample * sample;
-    }
-    const rms = Math.sqrt(sum / data.length);
-
-    if (rms > RMS_THRESHOLD) {
-      speechStarted = true;
-      silentSince = null;
-    } else if (speechStarted) {
-      if (!silentSince) silentSince = performance.now();
-      if (performance.now() - silentSince >= SILENCE_MS) {
-        finalizeSegment();
-        return;
-      }
-    }
-    animationFrame = requestAnimationFrame(tick);
-  };
-  tick();
+  if(!audioContext){audioContext=new AudioContext();analyser=audioContext.createAnalyser();analyser.fftSize=512;audioContext.createMediaStreamSource(stream).connect(analyser)}
+  const data=new Uint8Array(analyser.fftSize),bars=[...equalizer.querySelectorAll("i")];
+  const tick=()=>{
+    if(!recorder||recorder.state!=="recording")return;
+    analyser.getByteTimeDomainData(data);let sum=0;for(const v of data){const s=(v-128)/128;sum+=s*s}const rms=Math.sqrt(sum/data.length);
+    bars.forEach((b,i)=>{const k=Math.min(1,rms*18*(.72+((i%3)+1)*.13));b.style.height=(7+k*24)+"px"});
+    if(rms>RMS_THRESHOLD){speechStarted=true;silentSince=null;setSilenceProgress(0)}
+    else if(speechStarted&&recordingPurpose?.type==="new"){if(!silentSince)silentSince=performance.now();const p=Math.min(1,(performance.now()-silentSince)/SILENCE_MS);setSilenceProgress(p);if(p>=1){finalizeSegment();return}}
+    animationFrame=requestAnimationFrame(tick);
+  };tick();
 }
-
-function finalizeSegment() {
-  if (!recorder || recorder.state !== "recording") return;
-  cancelAnimationFrame(animationFrame);
-  recorder.stop();
-}
-
-function nextLine() {
-  if (recorder?.state === "recording") finalizeSegment();
-}
-
-function stopRecording() {
-  continuous = false;
-  resumeContinuousAfterClarify = false;
-  pendingClarifyRowId = null;
-  discardStoppedSegment = false;
-  if (recorder?.state === "recording") recorder.stop();
-  else closeStream();
+function setSilenceProgress(p){nextButton.style.setProperty("--silence-progress",String(p))}
+function finalizeSegment(){if(recorder?.state!=="recording")return;cancelAnimationFrame(animationFrame);recorder.stop()}
+function nextLine(){if(recorder?.state==="recording"&&recordingPurpose?.type==="new")finalizeSegment()}
+function stopAll(){continuous=false;pendingClarifyRowId=null;discardStoppedSegment=false;if(recorder?.state==="recording")recorder.stop();else closeStream();updateVoiceUi()}
+async function onRecorderStop(){
+  cancelAnimationFrame(animationFrame);setSilenceProgress(0);
+  const purpose=recordingPurpose,mt=recorder?.mimeType||"audio/webm",blob=new Blob(chunks,{type:mt});recorder=null;chunks=[];
+  const discard=purpose?.type==="new"&&discardStoppedSegment;if(discard)discardStoppedSegment=false;
+  let row=null;
+  if(purpose?.type==="new"&&!discard){row=newRow("Распознаём…");row.pending=true;rows.unshift(row);render()}
+  else if(purpose?.type==="clarify"){row=rows.find(x=>x.id===purpose.rowId);if(row){row.pending=true;render()}}
+  if(purpose?.type==="new"&&pendingClarifyRowId){const id=pendingClarifyRowId;pendingClarifyRowId=null;setTimeout(()=>{if(stream?.active&&!recorder)beginRecorder({type:"clarify",rowId:id})},80)}
+  else if(purpose?.type==="new"&&continuous){setTimeout(()=>{if(continuous&&stream?.active&&!recorder)beginRecorder({type:"new"})},90)}
+  else{continuous=false;closeStream()}
   updateVoiceUi();
-}
-
-async function onRecorderStop() {
-  cancelAnimationFrame(animationFrame);
-  const purpose = recordingPurpose;
-  const mimeType = recorder?.mimeType || "audio/webm";
-  const blob = new Blob(chunks, { type:mimeType });
-  recorder = null;
-  chunks = [];
-
-  const discardThisSegment = purpose?.type === "new" && discardStoppedSegment;
-  if (discardThisSegment) discardStoppedSegment = false;
-
-  let targetRow = null;
-  if (purpose?.type === "new" && !discardThisSegment) {
-    targetRow = newRow("Распознаём…");
-    targetRow.pending = true;
-    rows.push(targetRow);
-    render();
-  } else if (purpose?.type === "clarify") {
-    targetRow = rows.find(x => x.id === purpose.rowId);
-    if (targetRow) targetRow.pending = true;
-    render();
-  }
-
-  if (purpose?.type === "new" && pendingClarifyRowId) {
-    const rowId = pendingClarifyRowId;
-    pendingClarifyRowId = null;
-    setTimeout(() => {
-      if (stream?.active && !recorder) beginRecorder({ type:"clarify", rowId });
-    }, 80);
-  } else if (purpose?.type === "clarify" && resumeContinuousAfterClarify) {
-    resumeContinuousAfterClarify = false;
-    continuous = true;
-    setTimeout(() => {
-      if (continuous && stream?.active && !recorder) beginRecorder({ type:"new" });
-    }, 120);
-  } else if (continuous) {
-    setTimeout(() => {
-      if (continuous && stream?.active && !recorder) beginRecorder({ type:"new" });
-    }, 120);
-  } else {
-    closeStream();
-  }
-  updateVoiceUi();
-
-  if (!targetRow || blob.size < 500) {
-    if (targetRow?.text === "Распознаём…") rows = rows.filter(x => x.id !== targetRow.id);
-    render();
-    return;
-  }
-
-  try {
-    const form = new FormData();
-    const extension = mimeType.includes("mp4") ? "m4a" : "webm";
-    form.append("audio", blob, "voice." + extension);
-    const data = await api("/api/transcribe", { method:"POST", body:form });
-
-    if (purpose?.type === "clarify") {
-      targetRow.pending = false;
-      const extra = String(data.text || "").trim();
-      if (extra) targetRow.text = [targetRow.text, extra].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
-      await rematch(targetRow.id);
-      return;
+  if(!row||blob.size<500){if(row?.text==="Распознаём…")rows=rows.filter(x=>x.id!==row.id);render();return}
+  try{
+    const form=new FormData(),ext=mt.includes("mp4")?"m4a":"webm";form.append("audio",blob,"voice."+ext);
+    const d=await api("/api/transcribe",{method:"POST",body:form});
+    if(purpose?.type==="clarify"){
+      const extra=String(d.text||"").trim();if(extra)row.text=[row.text,extra].filter(Boolean).join(" ").replace(/\s+/g," ").trim();
+      row.pending=true;render();await rematch(row.id);return;
     }
-
-    applyMatch(targetRow, data);
-    render();
-  } catch (error) {
-    targetRow.pending = false;
-    if (targetRow.text === "Распознаём…") targetRow.text = "";
-    render();
-    toast(error.message);
-  }
+    row.text=d.text||"";row.rawText=d.rawText||d.text||"";applyParsed(row,d);render();
+  }catch(e){row.pending=false;if(row.text==="Распознаём…")row.text="";render();toast(e.message)}
 }
-
-function closeStream() {
-  stream?.getTracks().forEach(track => track.stop());
-  stream = null;
-  if (audioContext) {
-    audioContext.close().catch(() => {});
-    audioContext = null;
-    analyser = null;
-  }
+function closeStream(){stream?.getTracks().forEach(t=>t.stop());stream=null;if(audioContext){audioContext.close().catch(()=>{});audioContext=null;analyser=null}equalizer.querySelectorAll("i").forEach(b=>b.style.height="7px")}
+function updateVoiceUi(){
+  const live=recorder?.state==="recording",clarify=live&&recordingPurpose?.type==="clarify",main=live&&recordingPurpose?.type==="new";
+  voiceDock.classList.toggle("live",live);playButton.classList.toggle("clarify",clarify);nextButton.disabled=!main;nextButton.classList.toggle("enabled",main);
+  if(clarify){playIcon.textContent="■";voiceTitle.textContent="Уточнение";voiceHint.textContent="Нажмите Stop, когда закончите"}
+  else if(main){playIcon.textContent="Ⅱ";voiceTitle.textContent="Слушаю";voiceHint.textContent="Пауза — новая строка"}
+  else if(pendingClarifyRowId){playIcon.textContent="■";voiceTitle.textContent="Переключаюсь";voiceHint.textContent="На уточнение"}
+  else{playIcon.textContent="▶";voiceTitle.textContent="Готов";voiceHint.textContent="Play — продолжить"}
 }
+playButton.onclick=()=>{if(recorder?.state==="recording")stopAll();else startMain().catch(e=>toast(e.message))};
+nextButton.onclick=nextLine;
 
-function updateVoiceUi() {
-  const live = recorder?.state === "recording";
-  const switchingToClarify = Boolean(pendingClarifyRowId);
-  micPulse.classList.toggle("live", live);
-  nextButton.disabled = !live || recordingPurpose?.type === "clarify";
-  stopButton.disabled = !live && !continuous && !switchingToClarify && !resumeContinuousAfterClarify;
-  startButton.disabled = live || continuous || switchingToClarify || resumeContinuousAfterClarify;
-
-  if (switchingToClarify && !live) {
-    voiceTitle.textContent = "Переключаюсь на уточнение";
-    voiceHint.textContent = "Основной ввод продолжится автоматически после уточнения.";
-  } else if (live && recordingPurpose?.type === "clarify") {
-    voiceTitle.textContent = "Говорите уточнение";
-    voiceHint.textContent = resumeContinuousAfterClarify
-      ? "Пауза применит уточнение, затем основной ввод продолжится."
-      : "Пауза завершит уточнение выбранной строки.";
-  } else if (live) {
-    voiceTitle.textContent = "Слушаю текущую позицию";
-    voiceHint.textContent = "Пауза создаст строку автоматически.";
-  } else if (continuous) {
-    voiceTitle.textContent = "Продолжаю голосовой ввод";
-    voiceHint.textContent = "Готовлю следующую строку.";
-  } else {
-    voiceTitle.textContent = "Микрофон выключен";
-    voiceHint.textContent = "Начните диктовку или добавьте позицию вручную.";
-  }
-}
-
-function openPicker(rowId) {
-  pickerRowId = rowId;
-  pickerSearch.value = "";
-  renderPicker("");
-  pickerDialog.showModal();
-  setTimeout(() => pickerSearch.focus(), 50);
-}
-
-function renderPicker(query) {
-  const q = query.trim().toLowerCase().replaceAll("ё", "е");
-  const found = catalog
-    .filter(item => !q || item.name.toLowerCase().replaceAll("ё", "е").includes(q) || (item.aliases || []).some(a => a.includes(q)))
-    .slice(0, 60);
-  pickerResults.innerHTML = found.map(item => '<button class="picker-item" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(item.name) + '</button>').join("");
-  pickerResults.querySelectorAll(".picker-item").forEach(button => {
-    button.onclick = () => {
-      const item = catalog.find(x => x.id === button.dataset.id);
-      const row = rows.find(x => x.id === pickerRowId);
-      if (item && row) {
-        row.catalogItemId = item.id;
-        row.catalogItemName = item.name;
-        if (!row.candidates.some(c => c.id === item.id)) row.candidates.unshift({ ...item, score:1 });
-        render();
-      }
-      pickerDialog.close();
-    };
-  });
-}
-
-async function saveRequest() {
-  const valid = rows.filter(row => row.text.trim());
-  if (!valid.length) return toast("Добавьте хотя бы одну позицию");
-  saveButton.disabled = true;
-  saveState.textContent = "Сохраняем…";
-  try {
-    const saved = await api("/api/requests", {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body:JSON.stringify({ items:valid })
-    });
-    saveState.textContent = "Заявка #" + saved.id + " сохранена";
-    toast("Заявка сохранена");
-  } catch (error) {
-    saveState.textContent = "";
-    toast(error.message);
-  } finally {
-    saveButton.disabled = false;
-  }
-}
-
-startButton.onclick = () => startContinuous().catch(error => toast(error.message));
-nextButton.onclick = nextLine;
-stopButton.onclick = stopRecording;
-addManualButton.onclick = addManual;
-saveButton.onclick = saveRequest;
-catalogButton.onclick = () => catalogDialog.showModal();
-pickerSearch.oninput = () => renderPicker(pickerSearch.value);
-document.querySelectorAll(".close-dialog").forEach(button => {
-  button.onclick = () => button.closest("dialog").close();
-});
-[catalogDialog, pickerDialog].forEach(dialog => {
-  dialog.addEventListener("click", event => {
-    if (event.target === dialog) dialog.close();
-  });
-});
-window.addEventListener("beforeunload", closeStream);
-
-Promise.all([loadCatalog(), health()]).catch(error => toast(error.message));
-render();
+async function saveRequest(){const valid=rows.filter(r=>r.text.trim());if(!valid.length)return toast("Добавьте позицию");saveButton.disabled=true;saveState.textContent="Сохраняем…";try{const s=await api("/api/requests",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:valid})});saveState.textContent="Заявка #"+s.id+" сохранена";toast("Заявка сохранена")}catch(e){saveState.textContent="";toast(e.message)}finally{saveButton.disabled=false}}
+addManualButton.onclick=addManual;saveButton.onclick=saveRequest;catalogButton.onclick=()=>catalogDialog.showModal();
+document.querySelectorAll(".close-dialog").forEach(b=>b.onclick=()=>b.closest("dialog").close());
+[catalogDialog,segmentDialog].forEach(d=>d.addEventListener("click",e=>{if(e.target===d)d.close()}));
+window.addEventListener("beforeunload",closeStream);
+bootstrap().catch(e=>toast(e.message));render();updateVoiceUi();
