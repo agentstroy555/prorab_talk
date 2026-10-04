@@ -144,7 +144,11 @@ async function onRecorderStop(){
   else if(purpose?.type==="new"&&continuous){setTimeout(()=>{if(continuous&&stream?.active&&!recorder)beginRecorder({type:"new"})},90)}
   else{continuous=false;closeStream()}
   updateVoiceUi();
-  if(!row||blob.size<500){if(row?.text==="Распознаём…")rows=rows.filter(x=>x.id!==row.id);render();return}
+  if(!row||blob.size<500){
+    if(row?.text==="Распознаём…") rows=rows.filter(x=>x.id!==row.id);
+    else if(row) row.pending=false;
+    render();return;
+  }
   try{
     const form=new FormData(),ext=mt.includes("mp4")?"m4a":"webm";form.append("audio",blob,"voice."+ext);
     const d=await api("/api/transcribe",{method:"POST",body:form});
