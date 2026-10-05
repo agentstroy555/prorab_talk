@@ -1,4 +1,4 @@
-const APP_VERSION="0.2.2";
+const APP_VERSION="0.2.3";
 const APP_BUILD=2;
 const $=s=>document.querySelector(s);
 const rowsEl=$("#rows"),emptyState=$("#emptyState"),addManualButton=$("#addManualButton"),saveButton=$("#saveButton"),saveState=$("#saveState");
