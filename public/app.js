@@ -12,6 +12,11 @@ let clarifySession=null,clarifySerial=0,resumeMainPending=false;
 const SILENCE_MS=650,RMS_THRESHOLD=.025;
 
 function toast(message){toastEl.textContent=message;toastEl.classList.add("show");clearTimeout(toastEl._t);toastEl._t=setTimeout(()=>toastEl.classList.remove("show"),2200)}
+function haptic(kind="tap"){
+  if(typeof navigator.vibrate!=="function")return;
+  const pattern=kind==="commit"?[45,22,35]:kind==="strong"?36:18;
+  try{navigator.vibrate(pattern)}catch{}
+}
 async function api(url,options={}){const r=await fetch(url,options);const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.details||d.error||"Ошибка запроса");return d}
 async function bootstrap(){
   [catalog,families]=await Promise.all([api("/api/catalog?limit=1000"),api("/api/families")]);
@@ -43,11 +48,12 @@ function unitChoices(row){
   return [...new Set([row.unit,row.orderUnit,"шт","мешок","лист","рулон","упаковка","кг","м"].filter(Boolean))];
 }
 function parsedLabel(row){
-  const family=row.familyName||"Товар?";
-  const variant=row.variantLabel||"Вариант?";
-  const qty=row.quantity!==""&&row.quantity!==null&&row.quantity!==undefined?String(row.quantity):"Количество?";
-  const unit=row.unit||row.orderUnit||"";
-  return [family,variant,(qty+(unit?" "+unit:""))].join(" · ");
+  if(!row.familyName)return "Товар пока не определён";
+  const parts=[row.familyName];
+  if(row.variantLabel)parts.push(row.variantLabel);
+  const hasQty=row.quantity!==""&&row.quantity!==null&&row.quantity!==undefined;
+  if(hasQty)parts.push(String(row.quantity)+(row.unit||row.orderUnit?" "+(row.unit||row.orderUnit):""));
+  return parts.join(" · ");
 }
 function editorHtml(row){
   const fam=familyChoices(row),variants=variantChoices(row),units=unitChoices(row);
@@ -55,7 +61,8 @@ function editorHtml(row){
   const varPlaceholder=!row.variantId&&!row.manualVariant?option("","Выберите вариант",true):"";
   const famSelect=famPlaceholder+fam.map(x=>option(x.value,x.label,x.value===row.familyId)).join("")+option("__manual__","Ввести вручную",row.manualFamily);
   const varSelect=varPlaceholder+variants.map(x=>option(x.value,x.label,x.value===row.variantId)).join("")+option("__manual__","Ввести вручную",row.manualVariant);
-  const unitSelect=units.map(x=>option(x,x,x===(row.unit||row.orderUnit))).join("");
+  const unitPlaceholder=!(row.unit||row.orderUnit)?option("","Ед.",true):"";
+  const unitSelect=unitPlaceholder+units.map(x=>option(x,x,x===(row.unit||row.orderUnit))).join("");
   return '<div class="inline-editor">'+
       '<div class="editor-field"><label class="editor-label">Товар</label><select class="editor-control family-select">'+famSelect+'</select>'+
         (row.manualFamily?'<input class="editor-control manual-segment family-manual" value="'+esc(row.familyName)+'" placeholder="Название товара">':'')+'</div>'+
@@ -97,7 +104,7 @@ function render(){
       row.text=textarea.value;autoGrow(textarea);clearTimeout(timer);
       timer=setTimeout(()=>rematch(row.id,{collapse:true}),340);
     };
-    el.querySelector(".clarify-button").onclick=()=>startClarify(row.id).catch(e=>toast(e.message));
+    el.querySelector(".clarify-button").onclick=()=>{haptic("tap");startClarify(row.id).catch(e=>toast(e.message))};
     el.querySelector(".delete-row").onclick=()=>{rows=rows.filter(x=>x.id!==row.id);render()};
     if(row.editing)bindEditor(el,row); else el.querySelector(".parsed-pill").onclick=()=>{row.editing=true;render()};
     rowsEl.appendChild(el);
@@ -159,7 +166,7 @@ async function mergeRows(newerIndex,olderIndex){
   newer.rawText=[older.rawText,newer.rawText].filter(Boolean).join(" ").trim();
   newer.pending=true;rows.splice(olderIndex,1);render();await rematch(newer.id);
 }
-function addManual(){const r=newRow("");r.editing=true;rows.unshift(r);render();setTimeout(()=>rowsEl.querySelector(".voice-textarea")?.focus(),0)}
+function addManual(){const r=newRow("");rows.unshift(r);render();setTimeout(()=>rowsEl.querySelector(".voice-textarea")?.focus(),0)}
 
 async function ensureStream(){if(stream?.active)return stream;stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});return stream}
 function mime(){return["audio/webm;codecs=opus","audio/webm","audio/mp4"].find(x=>MediaRecorder.isTypeSupported(x))||""}
@@ -234,7 +241,7 @@ function watchLevel(){
       if(!silentSince)silentSince=performance.now();
       const p=Math.min(1,(performance.now()-silentSince)/SILENCE_MS);
       setSilenceProgress(p);
-      if(p>=1){finalizeSegment();return}
+      if(p>=1){haptic("commit");finalizeSegment();return}
     }
     animationFrame=requestAnimationFrame(tick);
   };
@@ -242,7 +249,7 @@ function watchLevel(){
 }
 function setSilenceProgress(p){nextButton.style.setProperty("--silence-progress",String(p))}
 function finalizeSegment(){if(recorder?.state!=="recording")return;cancelAnimationFrame(animationFrame);recorder.stop()}
-function nextLine(){if(recorder?.state==="recording"&&recordingPurpose?.type==="new")finalizeSegment()}
+function nextLine(){if(recorder?.state==="recording"&&recordingPurpose?.type==="new"){haptic("commit");finalizeSegment()}}
 function stopAll(){
   continuous=false;
   if(recordingPurpose?.type==="new")discardStoppedSegment=!speechStarted;else discardStoppedSegment=false;
@@ -437,21 +444,23 @@ function updateVoiceUi(){
     playIcon.textContent="▶";voiceTitle.textContent="Готов";voiceHint.textContent="Play — продолжить";
   }
 }
-playButton.onclick=()=>{if(recorder?.state==="recording")stopAll();else startMain().catch(e=>toast(e.message))};
+playButton.onclick=()=>{haptic("tap");if(recorder?.state==="recording")stopAll();else startMain().catch(e=>toast(e.message))};
 nextButton.onclick=nextLine;
 clarifyVoiceButton.onclick=()=>{
   const session=clarifySession;if(!session?.active)return;
   if(session.state==="recording"){
+    haptic("strong");
     session.state="transcribing";
     updateClarifyUi();
     finalizeSegment();
   }else if(session.state==="ready"){
+    haptic("tap");
     startClarifyRecording();
   }
 };
 clarifyClose.onclick=cancelClarify;
 clarifyCancel.onclick=cancelClarify;
-clarifyOk.onclick=acceptClarify;
+clarifyOk.onclick=()=>{haptic("tap");acceptClarify()};
 clarifyDialog.addEventListener("cancel",event=>{event.preventDefault();cancelClarify()});
 
 async function saveRequest(){
