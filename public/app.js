@@ -1,3 +1,5 @@
+const APP_VERSION="0.2.2";
+const APP_BUILD=2;
 const $=s=>document.querySelector(s);
 const rowsEl=$("#rows"),emptyState=$("#emptyState"),addManualButton=$("#addManualButton"),saveButton=$("#saveButton"),saveState=$("#saveState");
 const apiStatus=$("#apiStatus"),catalogButton=$("#catalogButton"),catalogDialog=$("#catalogDialog"),catalogText=$("#catalogText");
@@ -7,18 +9,164 @@ const clarifyEqualizer=$("#clarifyEqualizer"),clarifyStatus=$("#clarifyStatus"),
 
 let rows=[],catalog=[],families=[],rowSeq=0;
 let continuous=false,stream=null,recorder=null,chunks=[],analyser=null,audioContext=null,animationFrame=null,speechStarted=false,silentSince=null,recordingPurpose=null;
+let speechCandidateSince=null,speechStartedAt=null,voiceAboveMs=0,lastLevelAt=null,recordingStartedAt=null,maxRms=0;
 let discardStoppedSegment=false;
 let clarifySession=null,clarifySerial=0,resumeMainPending=false;
-const SILENCE_MS=650,RMS_THRESHOLD=.025;
+let sessionLogs=[],nextSttAt=0,sttQueue=Promise.resolve(),logDownloadButton=null;
+const sessionStartedAt=Date.now();
+const SILENCE_MS=650,RMS_THRESHOLD=.035,VOICE_ARM_MS=260,MIN_VOICED_MS=260,LOG_RETENTION_MS=120000,STT_MIN_INTERVAL_MS=3100;
 
+function trimLogs(){
+  const cutoff=Date.now()-LOG_RETENTION_MS;
+  sessionLogs=sessionLogs.filter(x=>x.ts>=cutoff);
+}
+function shortText(value,max=500){
+  const s=String(value??"");
+  return s.length>max?s.slice(0,max)+"…":s;
+}
+function logEvent(event,data={}){
+  const entry={ts:Date.now(),elapsedMs:Math.round(performance.now()),event,data};
+  sessionLogs.push(entry);
+  trimLogs();
+}
+function voiceSnapshot(){
+  return {
+    continuous,
+    recorderState:recorder?.state||null,
+    purpose:recordingPurpose?.type||null,
+    rows:rows.length,
+    speechStarted,
+    voiceAboveMs:Math.round(voiceAboveMs||0),
+    maxRms:Number((maxRms||0).toFixed(4)),
+    clarifyState:clarifySession?.state||null
+  };
+}
+function downloadLogs(){
+  trimLogs();
+  logEvent("logs.download",voiceSnapshot());
+  const header=[
+    "Prorab Talk session log",
+    "version: v"+APP_VERSION+" (build "+APP_BUILD+")",
+    "exported: "+new Date().toISOString(),
+    "sessionStarted: "+new Date(sessionStartedAt).toISOString(),
+    "url: "+location.href,
+    "userAgent: "+navigator.userAgent,
+    "window: last "+Math.round(LOG_RETENTION_MS/1000)+" seconds",
+    ""
+  ];
+  const body=sessionLogs.map(x=>"["+new Date(x.ts).toISOString()+"] +"+x.elapsedMs+"ms "+x.event+" "+JSON.stringify(x.data)).join("\n");
+  const blob=new Blob([header.join("\n")+body+"\n"],{type:"text/plain;charset=utf-8"});
+  const url=URL.createObjectURL(blob),a=document.createElement("a");
+  const stamp=new Date().toISOString().replace(/[:.]/g,"-");
+  a.href=url;a.download="prorab-talk-v"+APP_VERSION+"-build"+APP_BUILD+"-"+stamp+".txt";
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1500);
+}
+function installRuntimeUi(){
+  const strong=document.querySelector(".brand strong");
+  if(strong){
+    const parent=strong.parentElement;
+    let titleRow=parent.querySelector(".runtime-brand-title");
+    if(!titleRow){
+      titleRow=document.createElement("div");titleRow.className="runtime-brand-title";
+      parent.insertBefore(titleRow,strong);titleRow.appendChild(strong);
+    }
+    let badge=titleRow.querySelector(".runtime-version");
+    if(!badge){badge=document.createElement("small");badge.className="runtime-version";titleRow.appendChild(badge)}
+    badge.textContent="v"+APP_VERSION+" (build "+APP_BUILD+")";
+  }
+  const parent=catalogButton?.parentElement;
+  if(parent&&catalogButton&&!document.querySelector("#logDownloadButton")){
+    const actions=document.createElement("div");actions.className="runtime-header-actions";
+    parent.insertBefore(actions,catalogButton);
+    logDownloadButton=document.createElement("button");
+    logDownloadButton.id="logDownloadButton";logDownloadButton.className="icon-button runtime-log-button";
+    logDownloadButton.type="button";logDownloadButton.title="Скачать логи за последние 2 минуты";
+    logDownloadButton.setAttribute("aria-label","Скачать логи");
+    logDownloadButton.textContent="⇩";
+    actions.append(logDownloadButton,catalogButton);
+    logDownloadButton.onclick=()=>{haptic("tap");downloadLogs()};
+  }
+  const style=document.createElement("style");
+  style.dataset.runtimePatch="v0.2.2-build2";
+  style.textContent=`
+    .brand strong::after{display:none!important;content:none!important}
+    .runtime-brand-title{display:flex;align-items:baseline;gap:7px;min-width:0}
+    .runtime-version{font-size:10px;line-height:1;color:#9aa4b4;font-weight:650;white-space:nowrap}
+    .runtime-header-actions{display:flex;align-items:center;gap:8px}
+    .runtime-log-button{font-size:23px;line-height:1;color:#526074}
+    .voice-dock>.equalizer{flex:1 1 0!important;width:auto!important;min-width:0!important;display:grid!important;grid-template-columns:repeat(12,minmax(0,1fr))!important;gap:0!important;padding:0 7px!important;align-items:center!important;justify-content:stretch!important}
+    .voice-dock>.equalizer i{width:3px!important;justify-self:center!important}
+    .voice-dock>.next-button{margin-left:0!important;flex:0 0 auto!important}
+    .voice-dock>.play-button{flex:0 0 auto!important}
+    @media(max-width:560px){.voice-dock>.equalizer{padding:0 5px!important}.runtime-header-actions{gap:6px}}
+  `;
+  document.head.appendChild(style);
+}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+function likelyWhisperHallucination(text){
+  const t=String(text||"").trim().toLowerCase().replace(/ё/g,"е");
+  if(!t)return true;
+  return [
+    /^продолжение следует[.!…]?$/,
+    /^редактор субтитров\b/,
+    /^субтитры\b.*(?:редактор|корректор|делал|делала)/,
+    /^корректор\b/,
+    /^спасибо за просмотр[.!…]?$/
+  ].some(re=>re.test(t));
+}
+function isRateLimitError(error){return error?.status===429||/rate limit/i.test(String(error?.message||""))}
+function haltMainVoiceForRateLimit(error){
+  logEvent("stt.rate_limit",{message:shortText(error?.message),...voiceSnapshot()});
+  continuous=false;resumeMainPending=false;discardStoppedSegment=true;
+  if(recorder?.state==="recording"&&recordingPurpose?.type==="new"){
+    cancelAnimationFrame(animationFrame);recorder.stop();
+  }else if(!recorder){closeStream()}
+  updateVoiceUi();
+  toast("Лимит Groq: голосовой ввод поставлен на паузу. Повторите через несколько секунд.");
+}
+async function transcribeBlob(blob,mt,context,isValid=()=>true){
+  const run=async()=>{
+    const waitMs=Math.max(0,nextSttAt-Date.now());
+    if(waitMs){logEvent("stt.throttle",{context,waitMs});await sleep(waitMs)}
+    if(!isValid()){logEvent("stt.cancelled",{context,stage:"before_request"});return {cancelled:true}}
+    nextSttAt=Date.now()+STT_MIN_INTERVAL_MS;
+    logEvent("stt.request",{context,bytes:blob.size,mime:mt});
+    const form=new FormData(),ext=mt.includes("mp4")?"m4a":"webm";
+    form.append("audio",blob,"voice."+ext);
+    const d=await api("/api/transcribe",{method:"POST",body:form});
+    logEvent("stt.result",{context,text:shortText(d.text||""),rawText:shortText(d.rawText||"")});
+    return d;
+  };
+  const p=sttQueue.then(run,run);
+  sttQueue=p.catch(()=>{});
+  return p;
+}
 function toast(message){toastEl.textContent=message;toastEl.classList.add("show");clearTimeout(toastEl._t);toastEl._t=setTimeout(()=>toastEl.classList.remove("show"),2200)}
 function haptic(kind="tap"){
   if(typeof navigator.vibrate!=="function")return;
   const pattern=kind==="commit"?[45,22,35]:kind==="strong"?36:18;
   try{navigator.vibrate(pattern)}catch{}
 }
-async function api(url,options={}){const r=await fetch(url,options);const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.details||d.error||"Ошибка запроса");return d}
+async function api(url,options={}){
+  const method=options.method||"GET",started=performance.now();
+  logEvent("api.request",{method,url});
+  try{
+    const r=await fetch(url,options);
+    const d=await r.json().catch(()=>({}));
+    logEvent("api.response",{method,url,status:r.status,ms:Math.round(performance.now()-started),error:!r.ok?shortText(d.details||d.error||""):undefined});
+    if(!r.ok){
+      const error=new Error(d.details||d.error||"Ошибка запроса");
+      error.status=r.status;error.payload=d;error.apiLogged=true;throw error;
+    }
+    return d;
+  }catch(error){
+    if(!error.apiLogged)logEvent("api.error",{method,url,status:error.status||null,ms:Math.round(performance.now()-started),message:shortText(error.message)});
+    throw error;
+  }
+}
 async function bootstrap(){
+  logEvent("bootstrap.start",{version:APP_VERSION,build:APP_BUILD});
   [catalog,families]=await Promise.all([api("/api/catalog?limit=1000"),api("/api/families")]);
   catalogText.textContent=catalog.map(x=>x.name).join("\n");
   try{const h=await api("/api/health");apiStatus.textContent="готово · "+h.catalog+" SKU";apiStatus.style.color="var(--green)"}catch{apiStatus.textContent="сервис недоступен";apiStatus.style.color="var(--danger)"}
@@ -172,6 +320,7 @@ async function ensureStream(){if(stream?.active)return stream;stream=await navig
 function mime(){return["audio/webm;codecs=opus","audio/webm","audio/mp4"].find(x=>MediaRecorder.isTypeSupported(x))||""}
 async function startMain(){
   if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw new Error("Браузер не поддерживает запись");
+  logEvent("voice.main.start",voiceSnapshot());
   continuous=true;await ensureStream();beginRecorder({type:"new"});updateVoiceUi();
 }
 async function startClarify(rowId){
@@ -179,6 +328,7 @@ async function startClarify(rowId){
   const row=rows.find(x=>x.id===rowId);if(!row)return;
   const resumeMain=continuous||(recorder?.state==="recording"&&recordingPurpose?.type==="new");
   clarifySession={id:++clarifySerial,rowId,originalText:row.text,resumeMain,active:true,state:"preparing"};
+  logEvent("clarify.open",{rowId,resumeMain,text:shortText(row.text)});
   clarifyText.value=row.text;
   clarifyDialog.showModal();
   continuous=false;
@@ -210,11 +360,12 @@ async function startClarifyRecording(){
   }
 }
 function beginRecorder(purpose){
-  recordingPurpose=purpose;chunks=[];speechStarted=false;silentSince=null;setSilenceProgress(0);
+  recordingPurpose=purpose;chunks=[];speechStarted=false;silentSince=null;speechCandidateSince=null;speechStartedAt=null;voiceAboveMs=0;lastLevelAt=null;recordingStartedAt=performance.now();maxRms=0;setSilenceProgress(0);
   const mt=mime();recorder=mt?new MediaRecorder(stream,{mimeType:mt}):new MediaRecorder(stream);
   recorder.ondataavailable=e=>{if(e.data?.size)chunks.push(e.data)};
   recorder.onstop=onRecorderStop;
   recorder.start(200);
+  logEvent("recorder.start",{purpose:purpose?.type||null,mime:recorder.mimeType||mt,threshold:RMS_THRESHOLD,voiceArmMs:VOICE_ARM_MS});
   watchLevel();
   updateVoiceUi();
 }
@@ -231,40 +382,72 @@ function watchLevel(){
   const bars=[...target.querySelectorAll("i")];
   const tick=()=>{
     if(!recorder||recorder.state!=="recording")return;
+    const now=performance.now(),dt=lastLevelAt?Math.min(80,now-lastLevelAt):0;lastLevelAt=now;
     analyser.getByteTimeDomainData(data);
     let sum=0;
     for(const v of data){const s=(v-128)/128;sum+=s*s}
-    const rms=Math.sqrt(sum/data.length);
+    const rms=Math.sqrt(sum/data.length);maxRms=Math.max(maxRms,rms);
     bars.forEach((b,i)=>{const k=Math.min(1,rms*18*(.72+((i%3)+1)*.13));b.style.height=(7+k*24)+"px"});
-    if(rms>RMS_THRESHOLD){speechStarted=true;silentSince=null;setSilenceProgress(0)}
-    else if(speechStarted&&recordingPurpose?.type==="new"){
-      if(!silentSince)silentSince=performance.now();
-      const p=Math.min(1,(performance.now()-silentSince)/SILENCE_MS);
-      setSilenceProgress(p);
-      if(p>=1){haptic("commit");finalizeSegment();return}
+
+    if(rms>RMS_THRESHOLD){
+      if(!speechStarted){
+        if(speechCandidateSince===null)speechCandidateSince=now;
+        if(now-speechCandidateSince>=VOICE_ARM_MS){
+          speechStarted=true;speechStartedAt=speechCandidateSince;voiceAboveMs=now-speechCandidateSince;silentSince=null;setSilenceProgress(0);
+          logEvent("vad.speech_armed",{purpose:recordingPurpose?.type||null,rms:Number(rms.toFixed(4)),armMs:Math.round(now-speechCandidateSince),maxRms:Number(maxRms.toFixed(4))});
+        }
+      }else{
+        voiceAboveMs+=dt;silentSince=null;setSilenceProgress(0);
+      }
+    }else{
+      if(!speechStarted)speechCandidateSince=null;
+      if(speechStarted&&recordingPurpose?.type==="new"){
+        if(!silentSince){silentSince=now;logEvent("vad.silence_start",{voiceAboveMs:Math.round(voiceAboveMs),maxRms:Number(maxRms.toFixed(4))})}
+        const p=Math.min(1,(now-silentSince)/SILENCE_MS);
+        setSilenceProgress(p);
+        if(p>=1){
+          logEvent("vad.auto_finalize",{silenceMs:Math.round(now-silentSince),voiceAboveMs:Math.round(voiceAboveMs),maxRms:Number(maxRms.toFixed(4))});
+          haptic("commit");finalizeSegment("silence");return;
+        }
+      }
     }
     animationFrame=requestAnimationFrame(tick);
   };
   tick();
 }
 function setSilenceProgress(p){nextButton.style.setProperty("--silence-progress",String(p))}
-function finalizeSegment(){if(recorder?.state!=="recording")return;cancelAnimationFrame(animationFrame);recorder.stop()}
-function nextLine(){if(recorder?.state==="recording"&&recordingPurpose?.type==="new"){haptic("commit");finalizeSegment()}}
+function finalizeSegment(reason="manual"){
+  if(recorder?.state!=="recording")return;
+  logEvent("recorder.finalize",{reason,purpose:recordingPurpose?.type||null,speechStarted,voiceAboveMs:Math.round(voiceAboveMs),maxRms:Number(maxRms.toFixed(4))});
+  cancelAnimationFrame(animationFrame);recorder.stop();
+}
+function nextLine(){if(recorder?.state==="recording"&&recordingPurpose?.type==="new"){haptic("commit");finalizeSegment("next")}}
 function stopAll(){
   continuous=false;
   if(recordingPurpose?.type==="new")discardStoppedSegment=!speechStarted;else discardStoppedSegment=false;
+  logEvent("voice.main.stop",{speechStarted,voiceAboveMs:Math.round(voiceAboveMs),...voiceSnapshot()});
   if(recorder?.state==="recording")recorder.stop();else closeStream();
   updateVoiceUi();
 }
 async function onRecorderStop(){
   cancelAnimationFrame(animationFrame);setSilenceProgress(0);
   const purpose=recordingPurpose,mt=recorder?.mimeType||"audio/webm",blob=new Blob(chunks,{type:mt});
+  const metrics={
+    purpose:purpose?.type||null,
+    bytes:blob.size,
+    durationMs:Math.round(performance.now()-(recordingStartedAt||performance.now())),
+    speechStarted,
+    voiceAboveMs:Math.round(voiceAboveMs),
+    maxRms:Number(maxRms.toFixed(4))
+  };
   recorder=null;chunks=[];
+  logEvent("recorder.stop",metrics);
 
   if(purpose?.type==="clarifyDialog"){
     resetClarifyBars();
     const session=clarifySession;
     if(!session?.active||session.id!==purpose.sessionId){
+      logEvent("clarify.audio_discarded",{reason:"session_inactive",...metrics});
       if(resumeMainPending)setTimeout(resumeMainVoice,30);else closeStream();
       return;
     }
@@ -272,11 +455,9 @@ async function onRecorderStop(){
     return;
   }
 
-  const discard=purpose?.type==="new"&&discardStoppedSegment;if(discard)discardStoppedSegment=false;
-  let row=null;
-  if(purpose?.type==="new"&&!discard){
-    row=newRow("Распознаём…");row.pending=true;rows.unshift(row);render();
-  }
+  const discardFlag=purpose?.type==="new"&&discardStoppedSegment;if(discardFlag)discardStoppedSegment=false;
+  const meaningful=purpose?.type==="new"&&speechStarted&&voiceAboveMs>=MIN_VOICED_MS&&blob.size>=500;
+  const shouldDiscard=purpose?.type==="new"&&(discardFlag||!meaningful);
 
   if(purpose?.type==="new"&&clarifySession?.active&&clarifySession.state==="preparing"){
     setTimeout(()=>startClarifyRecording(),50);
@@ -288,16 +469,26 @@ async function onRecorderStop(){
   if(resumeMainPending)setTimeout(resumeMainVoice,30);
   updateVoiceUi();
 
-  if(!row||blob.size<500){
-    if(row?.text==="Распознаём…")rows=rows.filter(x=>x.id!==row.id);else if(row)row.pending=false;
-    render();return;
+  if(shouldDiscard){
+    logEvent("segment.discarded",{reason:discardFlag?"explicit_discard":"insufficient_voice",minVoicedMs:MIN_VOICED_MS,...metrics});
+    return;
   }
+  if(purpose?.type!=="new"||blob.size<500)return;
+
   try{
-    const form=new FormData(),ext=mt.includes("mp4")?"m4a":"webm";form.append("audio",blob,"voice."+ext);
-    const d=await api("/api/transcribe",{method:"POST",body:form});
-    row.text=d.text||"";row.rawText=d.rawText||d.text||"";applyParsed(row,d);render();
+    const d=await transcribeBlob(blob,mt,"main");
+    const text=String(d?.text||"").trim();
+    if(!text){logEvent("stt.discarded",{reason:"empty_text",...metrics});return}
+    if(likelyWhisperHallucination(text)){
+      logEvent("stt.discarded",{reason:"known_silence_hallucination",text:shortText(text),...metrics});
+      return;
+    }
+    const row=newRow(text);row.rawText=d.rawText||text;applyParsed(row,d);rows.unshift(row);render();
+    logEvent("row.created",{rowId:row.id,text:shortText(text),family:row.familyName||null,variant:row.variantLabel||null,quantity:row.quantity||null,unit:row.unit||null});
   }catch(e){
-    row.pending=false;if(row.text==="Распознаём…")row.text="";render();toast(e.message);
+    logEvent("stt.main_error",{status:e.status||null,message:shortText(e.message),...metrics});
+    if(isRateLimitError(e)){haltMainVoiceForRateLimit(e);return}
+    toast(e.message);
   }
 }
 async function transcribeClarification(blob,mt,sessionId){
@@ -306,28 +497,28 @@ async function transcribeClarification(blob,mt,sessionId){
   session.state="transcribing";
   updateClarifyUi();
   if(blob.size<500){
-    session.state="ready";
-    updateClarifyUi();
-    return;
+    logEvent("clarify.audio_discarded",{reason:"blob_too_small",bytes:blob.size});
+    session.state="ready";updateClarifyUi();return;
   }
   try{
-    const form=new FormData(),ext=mt.includes("mp4")?"m4a":"webm";
-    form.append("audio",blob,"voice."+ext);
-    const d=await api("/api/transcribe",{method:"POST",body:form});
+    const d=await transcribeBlob(blob,mt,"clarify",()=>Boolean(clarifySession?.active&&clarifySession.id===sessionId));
+    if(d?.cancelled)return;
     if(!clarifySession?.active||clarifySession.id!==sessionId)return;
     const extra=String(d.text||"").trim();
-    if(extra){
+    if(extra&&!likelyWhisperHallucination(extra)){
       const base=clarifyText.value.trimEnd();
       clarifyText.value=base?base+" "+extra:extra;
       clarifyText.scrollTop=clarifyText.scrollHeight;
+      logEvent("clarify.text_appended",{text:shortText(extra)});
+    }else if(extra){
+      logEvent("clarify.text_discarded",{reason:"known_silence_hallucination",text:shortText(extra)});
     }
-    clarifySession.state="ready";
-    updateClarifyUi();
+    clarifySession.state="ready";updateClarifyUi();
   }catch(error){
     if(!clarifySession?.active||clarifySession.id!==sessionId)return;
-    clarifySession.state="ready";
-    updateClarifyUi();
-    toast(error.message);
+    clarifySession.state="ready";updateClarifyUi();
+    logEvent("clarify.stt_error",{status:error.status||null,message:shortText(error.message)});
+    toast(isRateLimitError(error)?"Лимит Groq. Подождите несколько секунд и повторите.":error.message);
   }
 }
 function resetStructured(row){
@@ -339,6 +530,7 @@ function resetStructured(row){
 }
 function cancelClarify(){
   const session=clarifySession;if(!session)return;
+  logEvent("clarify.cancel",{rowId:session.rowId,state:session.state,resumeMain:session.resumeMain});
   const resume=session.resumeMain;
   session.active=false;clarifySession=null;
   if(clarifyDialog.open)clarifyDialog.close();
@@ -358,6 +550,7 @@ function cancelClarify(){
 function acceptClarify(){
   const session=clarifySession;
   if(!session?.active||session.state!=="ready")return;
+  logEvent("clarify.accept",{rowId:session.rowId,text:shortText(clarifyText.value),resumeMain:session.resumeMain});
   const row=rows.find(x=>x.id===session.rowId);
   const value=clarifyText.value.trim();
   const resume=session.resumeMain;
@@ -475,5 +668,9 @@ async function saveRequest(){
 addManualButton.onclick=addManual;saveButton.onclick=saveRequest;catalogButton.onclick=()=>catalogDialog.showModal();
 document.querySelectorAll(".close-dialog").forEach(b=>b.onclick=()=>b.closest("dialog").close());
 catalogDialog.addEventListener("click",e=>{if(e.target===catalogDialog)catalogDialog.close()});
+window.addEventListener("error",event=>logEvent("window.error",{message:shortText(event.message),source:event.filename||null,line:event.lineno||null,col:event.colno||null}));
+window.addEventListener("unhandledrejection",event=>logEvent("window.unhandledrejection",{message:shortText(event.reason?.message||event.reason)}));
 window.addEventListener("beforeunload",closeStream);
-bootstrap().catch(e=>toast(e.message));render();updateVoiceUi();
+installRuntimeUi();
+logEvent("session.start",{version:APP_VERSION,build:APP_BUILD,userAgent:navigator.userAgent,url:location.href});
+bootstrap().catch(e=>{logEvent("bootstrap.error",{message:shortText(e.message)});toast(e.message)});render();updateVoiceUi();
