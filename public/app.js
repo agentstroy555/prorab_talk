@@ -54,14 +54,11 @@ function editorHtml(row){
   const varSelect=varPlaceholder+variants.map(x=>option(x.value,x.label,x.value===row.variantId)).join("")+option("__manual__","Ввести вручную",row.manualVariant);
   const unitSelect=units.map(x=>option(x,x,x===(row.unit||row.orderUnit))).join("");
   return '<div class="inline-editor">'+
-    '<div class="editor-fields">'+
       '<div class="editor-field"><label class="editor-label">Товар</label><select class="editor-control family-select">'+famSelect+'</select>'+
         (row.manualFamily?'<input class="editor-control manual-segment family-manual" value="'+esc(row.familyName)+'" placeholder="Название товара">':'')+'</div>'+
       '<div class="editor-field"><label class="editor-label">Вариант</label><select class="editor-control variant-select">'+varSelect+'</select>'+
         (row.manualVariant?'<input class="editor-control manual-segment variant-manual" value="'+esc(row.variantLabel)+'" placeholder="Вариант SKU">':'')+'</div>'+
       '<div class="editor-field full"><label class="editor-label">Количество</label><div class="qty-unit-row"><input class="editor-control qty-input" inputmode="decimal" value="'+esc(row.quantity)+'" placeholder="Количество"><select class="editor-control unit-select">'+unitSelect+'</select></div></div>'+
-    '</div>'+
-    '<button class="editor-done" type="button" aria-label="Завершить редактирование">✓</button>'+
   '</div>';
 }
 function autoGrow(textarea){
@@ -76,15 +73,27 @@ function render(){
   rows.forEach((row,index)=>{
     if(index>0){const m=document.createElement("div");m.className="merge-wrap";m.innerHTML='<button class="merge-button" type="button">+</button>';m.firstChild.onclick=()=>mergeRows(index-1,index);rowsEl.appendChild(m)}
     const el=document.createElement("article");el.className="request-row"+(row.pending?" pending":"");
-    el.innerHTML='<div class="row-top">'+
+    const lowerLeft=row.editing
+      ? editorHtml(row)
+      : '<button class="parsed-pill" type="button"><span class="pill-text">'+esc(parsedLabel(row))+'</span></button>';
+    const lowerRight=row.editing
+      ? '<button class="editor-done" type="button" aria-label="Завершить редактирование">✓</button>'
+      : '<div class="action-placeholder" aria-hidden="true"></div>';
+    el.innerHTML='<div class="card-grid">'+
+      '<div class="text-cell"><div class="textarea-wrap">'+
         '<textarea class="voice-textarea" rows="1" placeholder="Товар, вариант, количество">'+esc(row.text)+'</textarea>'+
-        '<button class="clarify-button" type="button" title="Уточнить голосом"><span class="mic">🎙</span><span class="edit-mark">✎</span></button>'+
         '<button class="delete-row" type="button" title="Удалить">×</button>'+
-      '</div>'+
-      (row.editing?editorHtml(row):'<button class="parsed-pill" type="button"><span class="pill-text">'+esc(parsedLabel(row))+'</span><span class="pill-edit">⌄</span></button>');
+      '</div></div>'+
+      '<div class="action-cell top-action"><button class="clarify-button" type="button" title="Уточнить голосом"><span class="mic">🎙</span><span class="edit-mark">✎</span></button></div>'+
+      '<div class="structured-cell">'+lowerLeft+'</div>'+
+      '<div class="action-cell bottom-action">'+lowerRight+'</div>'+
+    '</div>';
     const textarea=el.querySelector(".voice-textarea");autoGrow(textarea);
     let timer;
-    textarea.oninput=()=>{row.text=textarea.value;autoGrow(textarea);clearTimeout(timer);timer=setTimeout(()=>rematch(row.id),340)};
+    textarea.oninput=()=>{
+      row.text=textarea.value;autoGrow(textarea);clearTimeout(timer);
+      timer=setTimeout(()=>rematch(row.id,{collapse:true}),340);
+    };
     el.querySelector(".clarify-button").onclick=()=>startClarify(row.id).catch(e=>toast(e.message));
     el.querySelector(".delete-row").onclick=()=>{rows=rows.filter(x=>x.id!==row.id);render()};
     if(row.editing)bindEditor(el,row); else el.querySelector(".parsed-pill").onclick=()=>{row.editing=true;render()};
@@ -128,15 +137,17 @@ function applyParsed(row,data){
   row.catalogItemId=data.variant?.id||null;row.catalogItemName=data.variant?.fullName||"";
   row.orderUnit=data.orderUnit||data.family?.orderUnit||"";
   row.manualFamily=false;row.manualVariant=false;
-  if(data.quantity!==null&&data.quantity!==undefined)row.quantity=data.quantity;
-  if(data.unit)row.unit=data.unit;else if(!row.unit&&row.orderUnit)row.unit=row.orderUnit;
+  row.quantity=data.quantity!==null&&data.quantity!==undefined?data.quantity:"";
+  row.unit=data.unit||row.orderUnit||"";
   row.pending=false;
 }
-async function rematch(id){
+async function rematch(id,{collapse=false}={}){
   const row=rows.find(x=>x.id===id);if(!row)return;
   try{
     const d=await api("/api/match",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:row.text})});
-    const editing=row.editing;applyParsed(row,d);row.editing=editing;render();
+    applyParsed(row,d);
+    if(collapse)row.editing=false;
+    render();
   }catch(e){toast(e.message)}
 }
 async function mergeRows(newerIndex,olderIndex){
@@ -213,7 +224,7 @@ async function onRecorderStop(){
     const d=await api("/api/transcribe",{method:"POST",body:form});
     if(purpose?.type==="clarify"){
       const extra=String(d.text||"").trim();if(extra)row.text=[row.text,extra].filter(Boolean).join(" ").replace(/\s+/g," ").trim();
-      row.pending=true;render();await rematch(row.id);return;
+      row.pending=true;render();await rematch(row.id,{collapse:true});return;
     }
     row.text=d.text||"";row.rawText=d.rawText||d.text||"";applyParsed(row,d);render();
   }catch(e){row.pending=false;if(row.text==="Распознаём…")row.text="";render();toast(e.message)}
