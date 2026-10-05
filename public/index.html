@@ -6,6 +6,8 @@
   <meta name="theme-color" content="#f5f7fb">
   <title>Прораб Talk</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/card-grid-v2.css">
+  <link rel="stylesheet" href="/clarify-dialog.css">
 </head>
 <body>
 <header class="topbar">
@@ -37,7 +39,7 @@
 <div class="voice-dock-shell">
   <div id="voiceDock" class="voice-dock">
     <div id="equalizer" class="equalizer" aria-label="Уровень микрофона">
-      <i></i><i></i><i></i><i></i><i></i><i></i>
+      <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
     </div>
     <div class="dock-state"><strong id="voiceTitle">Готов</strong><span id="voiceHint">Play — начать диктовку</span></div>
     <button id="nextButton" class="next-button" type="button" disabled aria-label="Следующая строка">
@@ -52,12 +54,27 @@
   <div id="catalogText" class="catalog-text">Загрузка…</div>
 </dialog>
 
-<dialog id="segmentDialog" class="dialog segment-dialog">
-  <div class="dialog-head"><div><span id="segmentKicker">Исправить</span><h2 id="segmentTitle">Выберите вариант</h2></div><button class="icon-button close-dialog" type="button">×</button></div>
-  <div id="segmentOptions" class="segment-options"></div>
-  <div id="manualWrap" class="manual-wrap" hidden>
-    <input id="manualInput" class="field" autocomplete="off" placeholder="Введите вручную">
-    <button id="manualSave" class="save-button" type="button">Готово</button>
+<dialog id="clarifyDialog" class="clarify-dialog">
+  <div class="clarify-head">
+    <h2>Уточнение</h2>
+    <button id="clarifyClose" class="clarify-close" type="button" aria-label="Отменить уточнение">×</button>
+  </div>
+  <div class="clarify-body">
+    <textarea id="clarifyText" class="clarify-text" rows="5" spellcheck="true"></textarea>
+  </div>
+  <div class="clarify-prefooter">
+    <div id="clarifyEqualizer" class="clarify-equalizer" aria-label="Уровень микрофона">
+      <i></i><i></i><i></i><i></i><i></i><i></i>
+    </div>
+    <span id="clarifyStatus" class="clarify-status">Подготавливаем микрофон…</span>
+    <button id="clarifyVoiceButton" class="clarify-voice-button" type="button">
+      <span id="clarifyVoiceIcon" class="clarify-voice-icon">■</span>
+      <span id="clarifyVoiceLabel">Стоп</span>
+    </button>
+  </div>
+  <div class="clarify-footer">
+    <button id="clarifyCancel" class="clarify-cancel" type="button">Отмена</button>
+    <button id="clarifyOk" class="clarify-ok" type="button" disabled>OK</button>
   </div>
 </dialog>
 
