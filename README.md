@@ -37,3 +37,5 @@ npm run dev
 ## Render
 
 `render.yaml` создаёт web service и PostgreSQL. `DATABASE_URL` связывается с Blueprint-базой автоматически, `GROQ_API_KEY` вводится как secret environment variable.
+
+<!-- repair staging write check -->
