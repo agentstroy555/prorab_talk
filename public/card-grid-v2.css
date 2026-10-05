@@ -18,3 +18,24 @@
   .inline-editor{grid-template-columns:minmax(0,1fr)}
   .inline-editor .editor-field,.inline-editor .editor-field.full{grid-column:1}
 }
+
+/* Mobile density pass */
+.request-row{padding-top:13px;padding-bottom:13px}
+.merge-wrap{height:7px;position:relative;z-index:4;overflow:visible}
+.merge-button{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:32px;height:32px;border-radius:50%;z-index:5;
+  box-shadow:0 4px 14px rgba(23,105,246,.28)
+}
+.voice-dock{justify-content:flex-end}
+.voice-dock>.equalizer{
+  flex:1 1 auto;width:auto;min-width:72px;justify-content:flex-start;
+  gap:4px;padding-left:5px;overflow:hidden
+}
+.voice-dock>.equalizer i{flex:0 0 3px}
+.next-button,.play-button{flex:0 0 auto}
+@media(max-width:560px){
+  .voice-dock{padding-left:14px;padding-right:8px;gap:9px}
+  .voice-dock>.equalizer{flex:1 1 auto;width:auto;min-width:0;padding-left:3px;gap:4px}
+  .next-button{margin-left:auto}
+}
