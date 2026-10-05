@@ -1,0 +1,8 @@
+.clarify-footer{display:flex;align-items:center;justify-content:flex-end;gap:9px;padding:11px 14px 13px;border-top:1px solid var(--line)}
+.clarify-cancel,.clarify-ok{height:40px;border-radius:11px;padding:0 16px;font-weight:800}
+.clarify-cancel{border:1px solid #d7dee9;background:#fff;color:#566176}
+.clarify-ok{border:0;background:var(--blue);color:#fff;min-width:70px}
+.clarify-ok:disabled{background:#d8dde6;color:#98a1b0}
+.clarify-spinner{width:18px;height:18px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:clarify-spin .8s linear infinite}
+@keyframes clarify-spin{to{transform:rotate(360deg)}}
+@media(max-width:560px){.clarify-dialog{width:calc(100vw - 18px)}.clarify-status{display:none}.clarify-text{height:126px}}
