@@ -28,3 +28,18 @@ test("combined screw size stays variant",()=>{
   const p=parseLine("кровельный саморез 4.8x60 мм 100 штук",catalog);
   assert.equal(p.family.id,"F2");assert.equal(p.variant.id,"4");assert.equal(p.quantity,100);assert.equal(p.unit,"шт");
 });
+
+test("quantity parses when SKU variant is omitted",()=>{
+  const localCatalog={families:[{
+    id:"F3",category:"Крепёж",name:"Дюбель-гвоздь",aliases:["дюбель гвоздь"],orderUnit:"шт",
+    variants:[
+      {id:"5",label:"6x40 мм",fullName:"Дюбель-гвоздь 6×40 мм",aliases:[]},
+      {id:"6",label:"8x60 мм",fullName:"Дюбель-гвоздь 8×60 мм",aliases:[]}
+    ]
+  }]};
+  const p=parseLine("дюбель гвозди три штуки",localCatalog);
+  assert.equal(p.family.id,"F3");
+  assert.equal(p.variant,null);
+  assert.equal(p.quantity,3);
+  assert.equal(p.unit,"шт");
+});

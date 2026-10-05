@@ -100,7 +100,8 @@ export function parseLine(text, catalog) {
   const variantQuery=variantTokens.join(" ");
   const variantCandidates=rankVariants(variantQuery,familyRef,5);
   const bestVariant=variantCandidates[0] || null;
-  const selectedVariant = bestVariant && (bestVariant.score >= 0.45 || familyRef?.variants.length===1) ? bestVariant : null;
+  const onlyVariantIsDefault = familyRef?.variants.length===1 && bestVariant?.label==="Стандарт";
+  const selectedVariant = bestVariant && (bestVariant.score >= 0.45 || onlyVariantIsDefault) ? bestVariant : null;
 
   const variantKeys=variantMeasureKeys(selectedVariant);
   let quantity=null, unit=null;
