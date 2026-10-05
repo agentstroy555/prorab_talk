@@ -37,7 +37,9 @@ function overlap(queryTokens, candidateTokens) {
     const w = weight(token);
     total += w;
     if (cand.has(token)) { hit += w; continue; }
-    if (token.length >= 5 && [...cand].some(c => c.length >= 5 && (c.startsWith(token) || token.startsWith(c)))) {
+    if (token.length >= 5 && [...cand].some(c => c.length >= 5 && (
+      c.startsWith(token) || token.startsWith(c) || c.slice(0,5) === token.slice(0,5)
+    ))) {
       hit += w * 0.72;
     }
   }

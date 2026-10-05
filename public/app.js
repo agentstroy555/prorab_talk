@@ -1,5 +1,5 @@
-const APP_VERSION="0.2.2";
-const APP_BUILD=2;
+const APP_VERSION="0.2.3";
+const APP_BUILD=3;
 const $=s=>document.querySelector(s);
 const rowsEl=$("#rows"),emptyState=$("#emptyState"),addManualButton=$("#addManualButton"),saveButton=$("#saveButton"),saveState=$("#saveState");
 const apiStatus=$("#apiStatus"),catalogButton=$("#catalogButton"),catalogDialog=$("#catalogDialog"),catalogText=$("#catalogText");
@@ -13,8 +13,10 @@ let speechCandidateSince=null,speechStartedAt=null,voiceAboveMs=0,lastLevelAt=nu
 let discardStoppedSegment=false;
 let clarifySession=null,clarifySerial=0,resumeMainPending=false;
 let sessionLogs=[],nextSttAt=0,sttQueue=Promise.resolve(),logDownloadButton=null;
+let neuralVad=null,neuralVadReady=false,neuralVadInitPromise=null,neuralVadListening=false,lastVadProbability=0,vadSilenceSince=null;
 const sessionStartedAt=Date.now();
-const SILENCE_MS=650,RMS_THRESHOLD=.035,VOICE_ARM_MS=260,MIN_VOICED_MS=260,LOG_RETENTION_MS=120000,STT_MIN_INTERVAL_MS=3100;
+const SILENCE_MS=650,RMS_THRESHOLD=.025,VOICE_ARM_MS=80,MIN_VOICED_MS=80,LOG_RETENTION_MS=120000,STT_MIN_INTERVAL_MS=3100;
+const VAD_POSITIVE_THRESHOLD=.22,VAD_NEGATIVE_THRESHOLD=.12,VAD_REDEMPTION_MS=600,VAD_MIN_SPEECH_MS=80,VAD_PRE_SPEECH_MS=500;
 
 function trimLogs(){
   const cutoff=Date.now()-LOG_RETENTION_MS;
@@ -88,7 +90,7 @@ function installRuntimeUi(){
     logDownloadButton.onclick=()=>{haptic("tap");downloadLogs()};
   }
   const style=document.createElement("style");
-  style.dataset.runtimePatch="v0.2.2-build2";
+  style.dataset.runtimePatch="v0.2.3-build3";
   style.textContent=`
     .brand strong::after{display:none!important;content:none!important}
     .runtime-brand-title{display:flex;align-items:baseline;gap:7px;min-width:0}
@@ -104,6 +106,86 @@ function installRuntimeUi(){
   document.head.appendChild(style);
 }
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+async function ensureNeuralVad(){
+  if(neuralVadReady&&neuralVad)return true;
+  if(neuralVadInitPromise)return neuralVadInitPromise;
+  neuralVadInitPromise=(async()=>{
+    if(!window.vad?.MicVAD)throw new Error("Локальный Silero VAD не загружен");
+    await ensureStream();
+    neuralVad=await window.vad.MicVAD.new({
+      startOnLoad:false,
+      model:"v6",
+      processorType:"auto",
+      positiveSpeechThreshold:VAD_POSITIVE_THRESHOLD,
+      negativeSpeechThreshold:VAD_NEGATIVE_THRESHOLD,
+      redemptionMs:VAD_REDEMPTION_MS,
+      preSpeechPadMs:VAD_PRE_SPEECH_MS,
+      minSpeechMs:VAD_MIN_SPEECH_MS,
+      submitUserSpeechOnPause:false,
+      baseAssetPath:"/vendor/vad/",
+      onnxWASMBasePath:"/vendor/vad/",
+      getStream:async()=>{await ensureStream();return stream},
+      pauseStream:async()=>undefined,
+      resumeStream:async()=>{await ensureStream();return stream},
+      onFrameProcessed:probs=>{
+        lastVadProbability=Number(probs?.isSpeech||0);
+        if(recordingPurpose?.type!=="new"||!speechStarted)return;
+        const now=performance.now();
+        if(lastVadProbability<VAD_NEGATIVE_THRESHOLD){
+          if(vadSilenceSince===null)vadSilenceSince=now;
+          setSilenceProgress(Math.min(1,(now-vadSilenceSince)/VAD_REDEMPTION_MS));
+        }else if(lastVadProbability>VAD_POSITIVE_THRESHOLD){
+          vadSilenceSince=null;setSilenceProgress(0);
+        }
+      },
+      onSpeechStart:()=>logEvent("neural_vad.speech_start",{probability:Number(lastVadProbability.toFixed(3))}),
+      onSpeechRealStart:()=>{
+        if(recordingPurpose?.type!=="new"||recorder?.state!=="recording")return;
+        speechStarted=true;speechStartedAt=performance.now();voiceAboveMs=Math.max(voiceAboveMs,VAD_MIN_SPEECH_MS);
+        vadSilenceSince=null;setSilenceProgress(0);
+        logEvent("neural_vad.speech_real_start",{probability:Number(lastVadProbability.toFixed(3))});
+      },
+      onSpeechEnd:()=>{
+        if(recordingPurpose?.type!=="new"||recorder?.state!=="recording")return;
+        logEvent("neural_vad.speech_end",{probability:Number(lastVadProbability.toFixed(3))});
+        haptic("commit");finalizeSegment("vad_end");
+      },
+      onVADMisfire:()=>logEvent("neural_vad.misfire",{probability:Number(lastVadProbability.toFixed(3))})
+    });
+    neuralVadReady=true;
+    logEvent("neural_vad.ready",{model:"v6",positive:VAD_POSITIVE_THRESHOLD,negative:VAD_NEGATIVE_THRESHOLD,redemptionMs:VAD_REDEMPTION_MS,minSpeechMs:VAD_MIN_SPEECH_MS,preSpeechPadMs:VAD_PRE_SPEECH_MS});
+    return true;
+  })().catch(error=>{
+    neuralVadReady=false;neuralVad=null;
+    logEvent("neural_vad.fallback",{message:shortText(error.message)});
+    toast("Silero VAD не запустился — используем резервный режим");
+    return false;
+  }).finally(()=>{neuralVadInitPromise=null});
+  return neuralVadInitPromise;
+}
+async function startNeuralVad(){
+  const ok=await ensureNeuralVad();
+  if(!ok)return false;
+  if(neuralVadListening)return true;
+  try{
+    await neuralVad.start();
+    neuralVadListening=true;vadSilenceSince=null;
+    logEvent("neural_vad.started");
+    return true;
+  }catch(error){
+    neuralVadReady=false;neuralVadListening=false;
+    logEvent("neural_vad.start_error",{message:shortText(error.message)});
+    return false;
+  }
+}
+async function pauseNeuralVad(){
+  if(!neuralVadReady||!neuralVad||!neuralVadListening)return;
+  try{
+    await neuralVad.pause();
+    neuralVadListening=false;vadSilenceSince=null;setSilenceProgress(0);
+    logEvent("neural_vad.paused");
+  }catch(error){logEvent("neural_vad.pause_error",{message:shortText(error.message)})}
+}
 function likelyWhisperHallucination(text){
   const t=String(text||"").trim().toLowerCase().replace(/ё/g,"е");
   if(!t)return true;
@@ -321,7 +403,7 @@ function mime(){return["audio/webm;codecs=opus","audio/webm","audio/mp4"].find(x
 async function startMain(){
   if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw new Error("Браузер не поддерживает запись");
   logEvent("voice.main.start",voiceSnapshot());
-  continuous=true;await ensureStream();beginRecorder({type:"new"});updateVoiceUi();
+  continuous=true;await ensureStream();await startNeuralVad();beginRecorder({type:"new"});updateVoiceUi();
 }
 async function startClarify(rowId){
   if(clarifySession?.active)return;
@@ -332,6 +414,7 @@ async function startClarify(rowId){
   clarifyText.value=row.text;
   clarifyDialog.showModal();
   continuous=false;
+  await pauseNeuralVad();
   updateClarifyUi();
   updateVoiceUi();
 
@@ -360,7 +443,7 @@ async function startClarifyRecording(){
   }
 }
 function beginRecorder(purpose){
-  recordingPurpose=purpose;chunks=[];speechStarted=false;silentSince=null;speechCandidateSince=null;speechStartedAt=null;voiceAboveMs=0;lastLevelAt=null;recordingStartedAt=performance.now();maxRms=0;setSilenceProgress(0);
+  recordingPurpose=purpose;chunks=[];speechStarted=false;silentSince=null;speechCandidateSince=null;speechStartedAt=null;voiceAboveMs=0;lastLevelAt=null;recordingStartedAt=performance.now();maxRms=0;vadSilenceSince=null;setSilenceProgress(0);
   const mt=mime();recorder=mt?new MediaRecorder(stream,{mimeType:mt}):new MediaRecorder(stream);
   recorder.ondataavailable=e=>{if(e.data?.size)chunks.push(e.data)};
   recorder.onstop=onRecorderStop;
@@ -389,25 +472,27 @@ function watchLevel(){
     const rms=Math.sqrt(sum/data.length);maxRms=Math.max(maxRms,rms);
     bars.forEach((b,i)=>{const k=Math.min(1,rms*18*(.72+((i%3)+1)*.13));b.style.height=(7+k*24)+"px"});
 
-    if(rms>RMS_THRESHOLD){
-      if(!speechStarted){
-        if(speechCandidateSince===null)speechCandidateSince=now;
-        if(now-speechCandidateSince>=VOICE_ARM_MS){
-          speechStarted=true;speechStartedAt=speechCandidateSince;voiceAboveMs=now-speechCandidateSince;silentSince=null;setSilenceProgress(0);
-          logEvent("vad.speech_armed",{purpose:recordingPurpose?.type||null,rms:Number(rms.toFixed(4)),armMs:Math.round(now-speechCandidateSince),maxRms:Number(maxRms.toFixed(4))});
+    if(!neuralVadReady){
+      if(rms>RMS_THRESHOLD){
+        if(!speechStarted){
+          if(speechCandidateSince===null)speechCandidateSince=now;
+          if(now-speechCandidateSince>=VOICE_ARM_MS){
+            speechStarted=true;speechStartedAt=speechCandidateSince;voiceAboveMs=now-speechCandidateSince;silentSince=null;setSilenceProgress(0);
+            logEvent("fallback_vad.speech_armed",{purpose:recordingPurpose?.type||null,rms:Number(rms.toFixed(4)),armMs:Math.round(now-speechCandidateSince),maxRms:Number(maxRms.toFixed(4))});
+          }
+        }else{
+          voiceAboveMs+=dt;silentSince=null;setSilenceProgress(0);
         }
       }else{
-        voiceAboveMs+=dt;silentSince=null;setSilenceProgress(0);
-      }
-    }else{
-      if(!speechStarted)speechCandidateSince=null;
-      if(speechStarted&&recordingPurpose?.type==="new"){
-        if(!silentSince){silentSince=now;logEvent("vad.silence_start",{voiceAboveMs:Math.round(voiceAboveMs),maxRms:Number(maxRms.toFixed(4))})}
-        const p=Math.min(1,(now-silentSince)/SILENCE_MS);
-        setSilenceProgress(p);
-        if(p>=1){
-          logEvent("vad.auto_finalize",{silenceMs:Math.round(now-silentSince),voiceAboveMs:Math.round(voiceAboveMs),maxRms:Number(maxRms.toFixed(4))});
-          haptic("commit");finalizeSegment("silence");return;
+        if(!speechStarted)speechCandidateSince=null;
+        if(speechStarted&&recordingPurpose?.type==="new"){
+          if(!silentSince){silentSince=now;logEvent("fallback_vad.silence_start",{voiceAboveMs:Math.round(voiceAboveMs),maxRms:Number(maxRms.toFixed(4))})}
+          const p=Math.min(1,(now-silentSince)/SILENCE_MS);
+          setSilenceProgress(p);
+          if(p>=1){
+            logEvent("fallback_vad.auto_finalize",{silenceMs:Math.round(now-silentSince),voiceAboveMs:Math.round(voiceAboveMs),maxRms:Number(maxRms.toFixed(4))});
+            haptic("commit");finalizeSegment("fallback_silence");return;
+          }
         }
       }
     }
@@ -418,12 +503,22 @@ function watchLevel(){
 function setSilenceProgress(p){nextButton.style.setProperty("--silence-progress",String(p))}
 function finalizeSegment(reason="manual"){
   if(recorder?.state!=="recording")return;
-  logEvent("recorder.finalize",{reason,purpose:recordingPurpose?.type||null,speechStarted,voiceAboveMs:Math.round(voiceAboveMs),maxRms:Number(maxRms.toFixed(4))});
+  if(recordingPurpose)recordingPurpose.finalizeReason=reason;
+  logEvent("recorder.finalize",{reason,purpose:recordingPurpose?.type||null,speechStarted,voiceAboveMs:Math.round(voiceAboveMs),maxRms:Number(maxRms.toFixed(4)),vadProbability:Number(lastVadProbability.toFixed(3))});
   cancelAnimationFrame(animationFrame);recorder.stop();
 }
-function nextLine(){if(recorder?.state==="recording"&&recordingPurpose?.type==="new"){haptic("commit");finalizeSegment("next")}}
+async function nextLine(){
+  if(recorder?.state!=="recording"||recordingPurpose?.type!=="new")return;
+  haptic("commit");
+  if(neuralVadReady){
+    await pauseNeuralVad();
+    recordingPurpose.restartVad=true;
+  }
+  finalizeSegment("next");
+}
 function stopAll(){
   continuous=false;
+  pauseNeuralVad();
   if(recordingPurpose?.type==="new")discardStoppedSegment=!speechStarted;else discardStoppedSegment=false;
   logEvent("voice.main.stop",{speechStarted,voiceAboveMs:Math.round(voiceAboveMs),...voiceSnapshot()});
   if(recorder?.state==="recording")recorder.stop();else closeStream();
@@ -434,6 +529,7 @@ async function onRecorderStop(){
   const purpose=recordingPurpose,mt=recorder?.mimeType||"audio/webm",blob=new Blob(chunks,{type:mt});
   const metrics={
     purpose:purpose?.type||null,
+    finalizeReason:purpose?.finalizeReason||null,
     bytes:blob.size,
     durationMs:Math.round(performance.now()-(recordingStartedAt||performance.now())),
     speechStarted,
@@ -456,13 +552,20 @@ async function onRecorderStop(){
   }
 
   const discardFlag=purpose?.type==="new"&&discardStoppedSegment;if(discardFlag)discardStoppedSegment=false;
-  const meaningful=purpose?.type==="new"&&speechStarted&&voiceAboveMs>=MIN_VOICED_MS&&blob.size>=500;
+  const forcedByNext=purpose?.type==="new"&&purpose?.finalizeReason==="next";
+  const vadMeaningful=neuralVadReady?speechStarted:(speechStarted&&voiceAboveMs>=MIN_VOICED_MS);
+  const meaningful=purpose?.type==="new"&&(forcedByNext?blob.size>0:(vadMeaningful&&blob.size>=500));
   const shouldDiscard=purpose?.type==="new"&&(discardFlag||!meaningful);
 
   if(purpose?.type==="new"&&clarifySession?.active&&clarifySession.state==="preparing"){
     setTimeout(()=>startClarifyRecording(),50);
   }else if(purpose?.type==="new"&&continuous){
-    setTimeout(()=>{if(continuous&&stream?.active&&!recorder)beginRecorder({type:"new"})},90);
+    setTimeout(async()=>{
+      if(continuous&&stream?.active&&!recorder){
+        if(purpose?.restartVad)await startNeuralVad();
+        beginRecorder({type:"new"});
+      }
+    },90);
   }else if(!resumeMainPending){
     closeStream();
   }
@@ -470,10 +573,10 @@ async function onRecorderStop(){
   updateVoiceUi();
 
   if(shouldDiscard){
-    logEvent("segment.discarded",{reason:discardFlag?"explicit_discard":"insufficient_voice",minVoicedMs:MIN_VOICED_MS,...metrics});
+    logEvent("segment.discarded",{reason:discardFlag?"explicit_discard":"insufficient_voice",forcedByNext,neuralVadReady,vadProbability:Number(lastVadProbability.toFixed(3)),minVoicedMs:MIN_VOICED_MS,...metrics});
     return;
   }
-  if(purpose?.type!=="new"||blob.size<500)return;
+  if(purpose?.type!=="new"||(!forcedByNext&&blob.size<500))return;
 
   try{
     const d=await transcribeBlob(blob,mt,"main");
@@ -578,6 +681,7 @@ async function resumeMainVoice(){
   try{
     await ensureStream();
     if(!continuous)return;
+    await startNeuralVad();
     beginRecorder({type:"new"});
   }catch(error){
     continuous=false;closeStream();toast(error.message);
@@ -619,6 +723,7 @@ function updateClarifyUi(){
 }
 function resetClarifyBars(){clarifyEqualizer.querySelectorAll("i").forEach(b=>b.style.height="7px")}
 function closeStream(){
+  pauseNeuralVad();
   stream?.getTracks().forEach(t=>t.stop());stream=null;
   if(audioContext){audioContext.close().catch(()=>{});audioContext=null;analyser=null}
   equalizer.querySelectorAll("i").forEach(b=>b.style.height="7px");
@@ -672,5 +777,5 @@ window.addEventListener("error",event=>logEvent("window.error",{message:shortTex
 window.addEventListener("unhandledrejection",event=>logEvent("window.unhandledrejection",{message:shortText(event.reason?.message||event.reason)}));
 window.addEventListener("beforeunload",closeStream);
 installRuntimeUi();
-logEvent("session.start",{version:APP_VERSION,build:APP_BUILD,userAgent:navigator.userAgent,url:location.href});
+logEvent("session.start",{version:APP_VERSION,build:APP_BUILD,userAgent:navigator.userAgent,url:location.href,vad:"silero-v6-local"});
 bootstrap().catch(e=>{logEvent("bootstrap.error",{message:shortText(e.message)});toast(e.message)});render();updateVoiceUi();
