@@ -1,0 +1,20 @@
+.card-grid{display:grid;grid-template-columns:minmax(0,1fr) 46px;grid-template-rows:auto auto;column-gap:8px;row-gap:8px;align-items:start}
+.text-cell{grid-column:1;grid-row:1;min-width:0}
+.structured-cell{grid-column:1;grid-row:2;min-width:0}
+.action-cell{grid-column:2;display:grid;place-items:start center}
+.top-action{grid-row:1}.bottom-action{grid-row:2}
+.action-placeholder{width:42px;height:42px}
+.textarea-wrap{position:relative;min-width:0}
+.voice-textarea{padding-right:35px}
+.delete-row{position:absolute;right:5px;top:5px;width:25px;height:25px;margin:0;border-radius:8px;background:rgba(255,255,255,.9);font-size:18px;line-height:1}
+.parsed-pill{margin-top:0;display:block}
+.parsed-pill .pill-text{display:block}
+.parsed-pill .pill-edit{display:none}
+.inline-editor{margin-top:0;display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,.95fr);gap:7px}
+.inline-editor .editor-field.full{grid-column:1/-1}
+.editor-done{align-self:start}
+@media(max-width:560px){
+  .card-grid{grid-template-columns:minmax(0,1fr) 44px;column-gap:7px;row-gap:7px}
+  .inline-editor{grid-template-columns:minmax(0,1fr)}
+  .inline-editor .editor-field,.inline-editor .editor-field.full{grid-column:1}
+}
