@@ -1,0 +1,48 @@
+.clarify-dialog{
+  width:min(520px,calc(100vw - 24px));
+  border:0;
+  border-radius:18px;
+  padding:0;
+  overflow:hidden;
+  background:#fff;
+  color:var(--text);
+  box-shadow:0 28px 90px rgba(17,29,52,.32)
+}
+.clarify-dialog::backdrop{background:rgba(13,24,43,.58);backdrop-filter:blur(2px)}
+.clarify-head{height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 14px 0 18px;border-bottom:1px solid var(--line)}
+.clarify-head h2{margin:0;font-size:20px}
+.clarify-close{width:38px;height:38px;border:0;border-radius:11px;background:transparent;color:#667288;font-size:28px;line-height:1;cursor:pointer}
+.clarify-close:active{background:#f0f2f6}
+.clarify-body{padding:14px 16px}
+.clarify-text{
+  display:block;width:100%;height:132px;min-height:132px;max-height:132px;resize:none;overflow-y:auto;
+  border:1px solid #cfd7e4;border-radius:13px;background:#fff;padding:11px 12px;outline:none;line-height:22px
+}
+.clarify-text:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(23,105,246,.09)}
+.clarify-prefooter{min-height:62px;display:flex;align-items:center;gap:10px;padding:9px 14px;border-top:1px solid var(--line);background:#fbfcfe}
+.clarify-equalizer{width:48px;height:36px;display:flex;align-items:center;justify-content:center;gap:3px;flex:none}
+.clarify-equalizer i{display:block;width:3px;height:7px;border-radius:4px;background:var(--blue);opacity:.35;transition:height .08s linear,opacity .12s}
+.clarify-dialog.recording .clarify-equalizer i{opacity:.95}
+.clarify-status{flex:1;min-width:0;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.clarify-voice-button{min-width:46px;height:44px;border:0;border-radius:13px;padding:0 13px;display:flex;align-items:center;justify-content:center;gap:7px;font-weight:800;cursor:pointer}
+.clarify-voice-button.recording{background:var(--danger);color:#fff}
+.clarify-voice-button.ready{background:var(--blue-soft);color:var(--blue);min-width:46px;padding:0 12px}
+.clarify-voice-button.busy{background:#eceff4;color:#7d889a;cursor:default}
+.clarify-voice-button:disabled{cursor:default}
+.clarify-voice-icon{font-size:18px;line-height:1}
+.clarify-spinner{width:18px;height:18px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:clarify-spin .8s linear infinite}
+@keyframes clarify-spin{to{transform:rotate(360deg)}}
+.clarify-footer{display:flex;align-items:center;justify-content:flex-end;gap:9px;padding:11px 14px 13px;border-top:1px solid var(--line);background:#fff}
+.clarify-cancel,.clarify-ok{height:40px;border-radius:11px;padding:0 16px;font-weight:800;cursor:pointer}
+.clarify-cancel{border:1px solid #d7dee9;background:#fff;color:#566176}
+.clarify-ok{border:0;background:var(--blue);color:#fff;min-width:70px}
+.clarify-ok:disabled{background:#d8dde6;color:#98a1b0;cursor:not-allowed}
+@media(max-width:560px){
+  .clarify-dialog{width:calc(100vw - 18px);border-radius:17px}
+  .clarify-head{height:54px;padding-left:15px}
+  .clarify-body{padding:12px}
+  .clarify-text{height:126px;min-height:126px;max-height:126px}
+  .clarify-prefooter{padding:8px 11px}
+  .clarify-status{display:none}
+  .clarify-footer{padding:10px 11px 12px}
+}
