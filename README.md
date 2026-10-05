@@ -1,4 +1,4 @@
-# Прораб Talk — MVP v0.2
+# Прораб Talk — MVP v0.2.1 (build 1)
 
 Мобильный voice-first прототип Agent Stroy для создания заявки на стройматериалы.
 
@@ -37,5 +37,3 @@ npm run dev
 ## Render
 
 `render.yaml` создаёт web service и PostgreSQL. `DATABASE_URL` связывается с Blueprint-базой автоматически, `GROQ_API_KEY` вводится как secret environment variable.
-
-<!-- repair staging write check -->
