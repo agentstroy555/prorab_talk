@@ -19,7 +19,7 @@
 
 <main class="page">
   <section class="guide">
-    <div><span class="guide-label">Говорите в порядке</span><strong>Товар <i>→</i> вариант <i>→</i> количество</strong></div>
+    <div><span class="guide-label">Говорите в порядке</span><strong>Товар <i>→</i> [вариант] <i>→</i> количество</strong></div>
     <span class="guide-example">Rotband → 25 кг → 30 мешков</span>
   </section>
 
@@ -32,7 +32,7 @@
     <div id="emptyState" class="empty">
       <div class="empty-icon">🎙</div>
       <strong>Нажмите Play и диктуйте</strong>
-      <span>Одна позиция: товар, затем вариант, затем количество.</span>
+      <span>Одна позиция: товар, при необходимости вариант, затем количество.</span>
     </div>
     <div class="save-bar"><span id="saveState"></span><button id="saveButton" class="save-button" type="button">Сохранить заявку</button></div>
   </section>
@@ -81,6 +81,8 @@
 </dialog>
 
 <div id="toast" class="toast"></div>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.wasm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/bundle.min.js"></script>
 <script type="module" src="/app.js"></script>
 </body>
 </html>
