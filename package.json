@@ -1,20 +1,26 @@
 {
   "name": "prorab-talk",
-  "version": "0.2.0",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "description": "Agent Stroy MVP: voice construction procurement input",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
     "check": "node --check server.js && node --check src/db.js && node --check src/matcher.js && node --check src/parser.js && node --check public/app.js",
-    "test": "node --test tests/parser.test.js"
+    "test": "node --test tests/parser.test.js",
+    "copy:vad": "node scripts/copy-vad-assets.mjs",
+    "postinstall": "npm run copy:vad"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
     "express": "^5.1.0",
     "multer": "^2.0.2",
-    "pg": "^8.16.3"
+    "pg": "^8.16.3",
+    "@ricky0123/vad-web": "0.0.31",
+    "onnxruntime-web": "1.22.0"
   }
 }
