@@ -1,0 +1,17 @@
+name: Staging CI
+
+on:
+  push:
+    branches: [ci-validate-v02]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run check
+      - run: npm test
