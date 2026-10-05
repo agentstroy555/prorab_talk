@@ -1,0 +1,7 @@
+.clarify-dialog{width:min(520px,calc(100vw - 24px));border:0;border-radius:18px;padding:0;background:#fff;color:var(--text)}
+.clarify-dialog::backdrop{background:rgba(13,24,43,.58)}
+.clarify-head{height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 14px 0 18px;border-bottom:1px solid var(--line)}
+.clarify-head h2{margin:0;font-size:20px}
+.clarify-close{width:38px;height:38px;border:0;border-radius:11px;background:transparent;color:#667288;font-size:28px}
+.clarify-body{padding:14px 16px}
+.clarify-text{display:block;width:100%;height:132px;resize:none;overflow-y:auto;border:1px solid #cfd7e4;border-radius:13px;padding:11px 12px;line-height:22px}
