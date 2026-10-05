@@ -2,10 +2,13 @@ const $=s=>document.querySelector(s);
 const rowsEl=$("#rows"),emptyState=$("#emptyState"),addManualButton=$("#addManualButton"),saveButton=$("#saveButton"),saveState=$("#saveState");
 const apiStatus=$("#apiStatus"),catalogButton=$("#catalogButton"),catalogDialog=$("#catalogDialog"),catalogText=$("#catalogText");
 const toastEl=$("#toast"),voiceDock=$("#voiceDock"),equalizer=$("#equalizer"),nextButton=$("#nextButton"),playButton=$("#playButton"),playIcon=$("#playIcon"),voiceTitle=$("#voiceTitle"),voiceHint=$("#voiceHint");
+const clarifyDialog=$("#clarifyDialog"),clarifyText=$("#clarifyText"),clarifyClose=$("#clarifyClose"),clarifyCancel=$("#clarifyCancel"),clarifyOk=$("#clarifyOk");
+const clarifyEqualizer=$("#clarifyEqualizer"),clarifyStatus=$("#clarifyStatus"),clarifyVoiceButton=$("#clarifyVoiceButton"),clarifyVoiceIcon=$("#clarifyVoiceIcon"),clarifyVoiceLabel=$("#clarifyVoiceLabel");
 
 let rows=[],catalog=[],families=[],rowSeq=0;
 let continuous=false,stream=null,recorder=null,chunks=[],analyser=null,audioContext=null,animationFrame=null,speechStarted=false,silentSince=null,recordingPurpose=null;
-let pendingClarifyRowId=null,discardStoppedSegment=false;
+let discardStoppedSegment=false;
+let clarifySession=null,clarifySerial=0,resumeMainPending=false;
 const SILENCE_MS=650,RMS_THRESHOLD=.025;
 
 function toast(message){toastEl.textContent=message;toastEl.classList.add("show");clearTimeout(toastEl._t);toastEl._t=setTimeout(()=>toastEl.classList.remove("show"),2200)}
@@ -165,56 +168,119 @@ async function startMain(){
   continuous=true;await ensureStream();beginRecorder({type:"new"});updateVoiceUi();
 }
 async function startClarify(rowId){
-  const live=recorder?.state==="recording";
-  if(live&&recordingPurpose?.type==="clarify")return toast("Сначала завершите текущее уточнение");
-  continuous=false;pendingClarifyRowId=rowId;
-  if(live&&recordingPurpose?.type==="new"){discardStoppedSegment=!speechStarted;finalizeSegment();updateVoiceUi();return}
-  await ensureStream();pendingClarifyRowId=null;beginRecorder({type:"clarify",rowId});updateVoiceUi();
+  if(clarifySession?.active)return;
+  const row=rows.find(x=>x.id===rowId);if(!row)return;
+  const resumeMain=continuous||(recorder?.state==="recording"&&recordingPurpose?.type==="new");
+  clarifySession={id:++clarifySerial,rowId,originalText:row.text,resumeMain,active:true,state:"preparing"};
+  clarifyText.value=row.text;
+  clarifyDialog.showModal();
+  continuous=false;
+  updateClarifyUi();
+  updateVoiceUi();
+
+  if(recorder?.state==="recording"){
+    if(recordingPurpose?.type!=="new")return;
+    discardStoppedSegment=!speechStarted;
+    finalizeSegment();
+    return;
+  }
+  await startClarifyRecording();
+}
+async function startClarifyRecording(){
+  const session=clarifySession;if(!session?.active)return;
+  try{
+    await ensureStream();
+    if(!clarifySession?.active||clarifySession.id!==session.id)return;
+    session.state="recording";
+    beginRecorder({type:"clarifyDialog",sessionId:session.id});
+    updateClarifyUi();
+  }catch(error){
+    if(clarifySession?.active&&clarifySession.id===session.id){
+      clarifySession.state="ready";
+      updateClarifyUi();
+    }
+    toast(error.message);
+  }
 }
 function beginRecorder(purpose){
   recordingPurpose=purpose;chunks=[];speechStarted=false;silentSince=null;setSilenceProgress(0);
   const mt=mime();recorder=mt?new MediaRecorder(stream,{mimeType:mt}):new MediaRecorder(stream);
-  recorder.ondataavailable=e=>{if(e.data?.size)chunks.push(e.data)};recorder.onstop=onRecorderStop;recorder.start(200);watchLevel();updateVoiceUi();
+  recorder.ondataavailable=e=>{if(e.data?.size)chunks.push(e.data)};
+  recorder.onstop=onRecorderStop;
+  recorder.start(200);
+  watchLevel();
+  updateVoiceUi();
 }
 function watchLevel(){
   cancelAnimationFrame(animationFrame);
-  if(!audioContext){audioContext=new AudioContext();analyser=audioContext.createAnalyser();analyser.fftSize=512;audioContext.createMediaStreamSource(stream).connect(analyser)}
-  const data=new Uint8Array(analyser.fftSize),bars=[...equalizer.querySelectorAll("i")];
+  if(!audioContext){
+    audioContext=new AudioContext();
+    analyser=audioContext.createAnalyser();
+    analyser.fftSize=512;
+    audioContext.createMediaStreamSource(stream).connect(analyser);
+  }
+  const data=new Uint8Array(analyser.fftSize);
+  const target=recordingPurpose?.type==="clarifyDialog"?clarifyEqualizer:equalizer;
+  const bars=[...target.querySelectorAll("i")];
   const tick=()=>{
     if(!recorder||recorder.state!=="recording")return;
-    analyser.getByteTimeDomainData(data);let sum=0;for(const v of data){const s=(v-128)/128;sum+=s*s}const rms=Math.sqrt(sum/data.length);
+    analyser.getByteTimeDomainData(data);
+    let sum=0;
+    for(const v of data){const s=(v-128)/128;sum+=s*s}
+    const rms=Math.sqrt(sum/data.length);
     bars.forEach((b,i)=>{const k=Math.min(1,rms*18*(.72+((i%3)+1)*.13));b.style.height=(7+k*24)+"px"});
     if(rms>RMS_THRESHOLD){speechStarted=true;silentSince=null;setSilenceProgress(0)}
     else if(speechStarted&&recordingPurpose?.type==="new"){
       if(!silentSince)silentSince=performance.now();
-      const p=Math.min(1,(performance.now()-silentSince)/SILENCE_MS);setSilenceProgress(p);
+      const p=Math.min(1,(performance.now()-silentSince)/SILENCE_MS);
+      setSilenceProgress(p);
       if(p>=1){finalizeSegment();return}
     }
     animationFrame=requestAnimationFrame(tick);
-  };tick();
+  };
+  tick();
 }
 function setSilenceProgress(p){nextButton.style.setProperty("--silence-progress",String(p))}
 function finalizeSegment(){if(recorder?.state!=="recording")return;cancelAnimationFrame(animationFrame);recorder.stop()}
 function nextLine(){if(recorder?.state==="recording"&&recordingPurpose?.type==="new")finalizeSegment()}
 function stopAll(){
-  continuous=false;pendingClarifyRowId=null;
+  continuous=false;
   if(recordingPurpose?.type==="new")discardStoppedSegment=!speechStarted;else discardStoppedSegment=false;
-  if(recorder?.state==="recording")recorder.stop();else closeStream();updateVoiceUi()
+  if(recorder?.state==="recording")recorder.stop();else closeStream();
+  updateVoiceUi();
 }
 async function onRecorderStop(){
   cancelAnimationFrame(animationFrame);setSilenceProgress(0);
-  const purpose=recordingPurpose,mt=recorder?.mimeType||"audio/webm",blob=new Blob(chunks,{type:mt});recorder=null;chunks=[];
+  const purpose=recordingPurpose,mt=recorder?.mimeType||"audio/webm",blob=new Blob(chunks,{type:mt});
+  recorder=null;chunks=[];
+
+  if(purpose?.type==="clarifyDialog"){
+    resetClarifyBars();
+    const session=clarifySession;
+    if(!session?.active||session.id!==purpose.sessionId){
+      if(resumeMainPending)setTimeout(resumeMainVoice,30);else closeStream();
+      return;
+    }
+    await transcribeClarification(blob,mt,purpose.sessionId);
+    return;
+  }
+
   const discard=purpose?.type==="new"&&discardStoppedSegment;if(discard)discardStoppedSegment=false;
   let row=null;
-  if(purpose?.type==="new"&&!discard){row=newRow("Распознаём…");row.pending=true;rows.unshift(row);render()}
-  else if(purpose?.type==="clarify"){row=rows.find(x=>x.id===purpose.rowId);if(row){row.pending=true;render()}}
-  if(purpose?.type==="new"&&pendingClarifyRowId){
-    const id=pendingClarifyRowId;pendingClarifyRowId=null;
-    setTimeout(()=>{if(stream?.active&&!recorder)beginRecorder({type:"clarify",rowId:id})},80)
+  if(purpose?.type==="new"&&!discard){
+    row=newRow("Распознаём…");row.pending=true;rows.unshift(row);render();
+  }
+
+  if(purpose?.type==="new"&&clarifySession?.active&&clarifySession.state==="preparing"){
+    setTimeout(()=>startClarifyRecording(),50);
   }else if(purpose?.type==="new"&&continuous){
-    setTimeout(()=>{if(continuous&&stream?.active&&!recorder)beginRecorder({type:"new"})},90)
-  }else{continuous=false;closeStream()}
+    setTimeout(()=>{if(continuous&&stream?.active&&!recorder)beginRecorder({type:"new"})},90);
+  }else if(!resumeMainPending){
+    closeStream();
+  }
+  if(resumeMainPending)setTimeout(resumeMainVoice,30);
   updateVoiceUi();
+
   if(!row||blob.size<500){
     if(row?.text==="Распознаём…")rows=rows.filter(x=>x.id!==row.id);else if(row)row.pending=false;
     render();return;
@@ -222,28 +288,169 @@ async function onRecorderStop(){
   try{
     const form=new FormData(),ext=mt.includes("mp4")?"m4a":"webm";form.append("audio",blob,"voice."+ext);
     const d=await api("/api/transcribe",{method:"POST",body:form});
-    if(purpose?.type==="clarify"){
-      const extra=String(d.text||"").trim();if(extra)row.text=[row.text,extra].filter(Boolean).join(" ").replace(/\s+/g," ").trim();
-      row.pending=true;render();await rematch(row.id,{collapse:true});return;
-    }
     row.text=d.text||"";row.rawText=d.rawText||d.text||"";applyParsed(row,d);render();
-  }catch(e){row.pending=false;if(row.text==="Распознаём…")row.text="";render();toast(e.message)}
+  }catch(e){
+    row.pending=false;if(row.text==="Распознаём…")row.text="";render();toast(e.message);
+  }
 }
+async function transcribeClarification(blob,mt,sessionId){
+  const session=clarifySession;
+  if(!session?.active||session.id!==sessionId)return;
+  session.state="transcribing";
+  updateClarifyUi();
+  if(blob.size<500){
+    session.state="ready";
+    updateClarifyUi();
+    return;
+  }
+  try{
+    const form=new FormData(),ext=mt.includes("mp4")?"m4a":"webm";
+    form.append("audio",blob,"voice."+ext);
+    const d=await api("/api/transcribe",{method:"POST",body:form});
+    if(!clarifySession?.active||clarifySession.id!==sessionId)return;
+    const extra=String(d.text||"").trim();
+    if(extra){
+      const base=clarifyText.value.trimEnd();
+      clarifyText.value=base?base+" "+extra:extra;
+      clarifyText.scrollTop=clarifyText.scrollHeight;
+    }
+    clarifySession.state="ready";
+    updateClarifyUi();
+  }catch(error){
+    if(!clarifySession?.active||clarifySession.id!==sessionId)return;
+    clarifySession.state="ready";
+    updateClarifyUi();
+    toast(error.message);
+  }
+}
+function resetStructured(row){
+  row.familyId=null;row.familyName="";row.familyCandidates=[];
+  row.variantId=null;row.variantLabel="";row.variantCandidates=[];
+  row.catalogItemId=null;row.catalogItemName="";
+  row.quantity="";row.unit="";row.orderUnit="";
+  row.manualFamily=false;row.manualVariant=false;row.editing=false;
+}
+function cancelClarify(){
+  const session=clarifySession;if(!session)return;
+  const resume=session.resumeMain;
+  session.active=false;clarifySession=null;
+  if(clarifyDialog.open)clarifyDialog.close();
+  resetClarifyBars();
+  resumeMainPending=resume;
+
+  if(recorder?.state==="recording"&&recordingPurpose?.type==="clarifyDialog"){
+    cancelAnimationFrame(animationFrame);
+    recorder.stop();
+  }else if(resume){
+    setTimeout(resumeMainVoice,30);
+  }else if(!recorder){
+    closeStream();
+  }
+  updateVoiceUi();
+}
+function acceptClarify(){
+  const session=clarifySession;
+  if(!session?.active||session.state!=="ready")return;
+  const row=rows.find(x=>x.id===session.rowId);
+  const value=clarifyText.value.trim();
+  const resume=session.resumeMain;
+  session.active=false;clarifySession=null;
+  if(clarifyDialog.open)clarifyDialog.close();
+  resetClarifyBars();
+
+  if(row){
+    row.text=value;row.rawText=value;
+    resetStructured(row);
+    row.pending=true;
+    render();
+    rematch(row.id,{collapse:true});
+  }
+
+  resumeMainPending=resume;
+  if(resume)setTimeout(resumeMainVoice,30);else if(!recorder)closeStream();
+  updateVoiceUi();
+}
+async function resumeMainVoice(){
+  if(!resumeMainPending)return;
+  if(recorder){setTimeout(resumeMainVoice,50);return}
+  resumeMainPending=false;
+  continuous=true;
+  try{
+    await ensureStream();
+    if(!continuous)return;
+    beginRecorder({type:"new"});
+  }catch(error){
+    continuous=false;closeStream();toast(error.message);
+  }
+  updateVoiceUi();
+}
+function updateClarifyUi(){
+  const session=clarifySession;if(!session)return;
+  const state=session.state;
+  clarifyDialog.classList.toggle("recording",state==="recording");
+  clarifyVoiceButton.className="clarify-voice-button";
+  clarifyVoiceButton.disabled=state==="preparing"||state==="transcribing";
+  clarifyOk.disabled=state!=="ready";
+
+  if(state==="recording"){
+    clarifyVoiceButton.classList.add("recording");
+    clarifyVoiceIcon.textContent="■";
+    clarifyVoiceLabel.textContent="Стоп";
+    clarifyStatus.textContent="Слушаю уточнение…";
+  }else if(state==="transcribing"){
+    clarifyVoiceButton.classList.add("busy");
+    clarifyVoiceIcon.innerHTML='<span class="clarify-spinner"></span>';
+    clarifyVoiceLabel.textContent="Распознаём";
+    clarifyStatus.textContent="Расшифровываем голос…";
+  }else if(state==="ready"){
+    clarifyVoiceButton.classList.add("ready");
+    clarifyVoiceIcon.textContent="🎙";
+    clarifyVoiceLabel.textContent="";
+    clarifyStatus.textContent="Можно исправить текст или добавить ещё";
+    resetClarifyBars();
+  }else{
+    clarifyVoiceButton.classList.add("busy");
+    clarifyVoiceIcon.innerHTML='<span class="clarify-spinner"></span>';
+    clarifyVoiceLabel.textContent="";
+    clarifyStatus.textContent="Подготавливаем микрофон…";
+  }
+}
+function resetClarifyBars(){clarifyEqualizer.querySelectorAll("i").forEach(b=>b.style.height="7px")}
 function closeStream(){
   stream?.getTracks().forEach(t=>t.stop());stream=null;
   if(audioContext){audioContext.close().catch(()=>{});audioContext=null;analyser=null}
-  equalizer.querySelectorAll("i").forEach(b=>b.style.height="7px")
+  equalizer.querySelectorAll("i").forEach(b=>b.style.height="7px");
+  resetClarifyBars();
 }
 function updateVoiceUi(){
-  const live=recorder?.state==="recording",clarify=live&&recordingPurpose?.type==="clarify",main=live&&recordingPurpose?.type==="new";
-  voiceDock.classList.toggle("live",live);playButton.classList.toggle("clarify",clarify);nextButton.disabled=!main;nextButton.classList.toggle("enabled",main);
-  if(clarify){playIcon.textContent="■";voiceTitle.textContent="Уточнение";voiceHint.textContent="Нажмите Stop, когда закончите"}
-  else if(main){playIcon.textContent="Ⅱ";voiceTitle.textContent="Слушаю";voiceHint.textContent="Пауза — новая строка"}
-  else if(pendingClarifyRowId){playIcon.textContent="■";voiceTitle.textContent="Переключаюсь";voiceHint.textContent="На уточнение"}
-  else{playIcon.textContent="▶";voiceTitle.textContent="Готов";voiceHint.textContent="Play — продолжить"}
+  const live=recorder?.state==="recording",main=live&&recordingPurpose?.type==="new";
+  voiceDock.classList.toggle("live",main);
+  playButton.classList.remove("clarify");
+  nextButton.disabled=!main;nextButton.classList.toggle("enabled",main);
+  if(clarifySession?.active){
+    playIcon.textContent="Ⅱ";voiceTitle.textContent="Пауза";voiceHint.textContent="Открыто уточнение";
+  }else if(main){
+    playIcon.textContent="Ⅱ";voiceTitle.textContent="Слушаю";voiceHint.textContent="Пауза — новая строка";
+  }else{
+    playIcon.textContent="▶";voiceTitle.textContent="Готов";voiceHint.textContent="Play — продолжить";
+  }
 }
 playButton.onclick=()=>{if(recorder?.state==="recording")stopAll();else startMain().catch(e=>toast(e.message))};
 nextButton.onclick=nextLine;
+clarifyVoiceButton.onclick=()=>{
+  const session=clarifySession;if(!session?.active)return;
+  if(session.state==="recording"){
+    session.state="transcribing";
+    updateClarifyUi();
+    finalizeSegment();
+  }else if(session.state==="ready"){
+    startClarifyRecording();
+  }
+};
+clarifyClose.onclick=cancelClarify;
+clarifyCancel.onclick=cancelClarify;
+clarifyOk.onclick=acceptClarify;
+clarifyDialog.addEventListener("cancel",event=>{event.preventDefault();cancelClarify()});
 
 async function saveRequest(){
   const valid=rows.filter(r=>r.text.trim());if(!valid.length)return toast("Добавьте позицию");
