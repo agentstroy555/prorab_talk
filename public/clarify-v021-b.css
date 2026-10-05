@@ -1,8 +1,8 @@
 .clarify-prefooter{min-height:62px;display:flex;align-items:center;gap:10px;padding:9px 14px;border-top:1px solid var(--line);background:#fbfcfe}
-.clarify-equalizer{width:48px;height:36px;display:flex;align-items:center;justify-content:center;gap:3px}
-.clarify-equalizer i{display:block;width:3px;height:7px;border-radius:4px;background:var(--blue);opacity:.35}
+.clarify-equalizer{flex:1 1 auto;width:auto;min-width:96px;height:36px;display:flex;align-items:center;justify-content:stretch;gap:2px;overflow:hidden;padding:0 4px}
+.clarify-equalizer i{display:block;flex:1 1 0;min-width:2px;max-width:3px;height:7px;border-radius:4px;background:var(--blue);opacity:.35;transition:height .065s linear,opacity .1s}
+.clarify-status{flex:0 1 140px;min-width:0;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .clarify-dialog.recording .clarify-equalizer i{opacity:.95}
-.clarify-status{flex:1;min-width:0;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .clarify-voice-button{min-width:46px;height:44px;border:0;border-radius:13px;padding:0 13px;display:flex;align-items:center;justify-content:center;gap:7px;font-weight:800}
 .clarify-voice-button.recording{background:var(--danger);color:#fff}
 .clarify-voice-button.ready{background:var(--blue-soft);color:var(--blue)}

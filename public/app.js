@@ -1,11 +1,11 @@
-const APP_VERSION="0.2.3";
-const APP_BUILD=3;
+const APP_VERSION="0.2.4";
+const APP_BUILD=4;
 const $=s=>document.querySelector(s);
 const rowsEl=$("#rows"),emptyState=$("#emptyState"),addManualButton=$("#addManualButton"),saveButton=$("#saveButton"),saveState=$("#saveState");
 const apiStatus=$("#apiStatus"),catalogButton=$("#catalogButton"),catalogDialog=$("#catalogDialog"),catalogText=$("#catalogText");
 const toastEl=$("#toast"),voiceDock=$("#voiceDock"),equalizer=$("#equalizer"),nextButton=$("#nextButton"),playButton=$("#playButton"),playIcon=$("#playIcon"),voiceTitle=$("#voiceTitle"),voiceHint=$("#voiceHint");
 const clarifyDialog=$("#clarifyDialog"),clarifyText=$("#clarifyText"),clarifyClose=$("#clarifyClose"),clarifyCancel=$("#clarifyCancel"),clarifyOk=$("#clarifyOk");
-const clarifyEqualizer=$("#clarifyEqualizer"),clarifyStatus=$("#clarifyStatus"),clarifyVoiceButton=$("#clarifyVoiceButton"),clarifyVoiceIcon=$("#clarifyVoiceIcon"),clarifyVoiceLabel=$("#clarifyVoiceLabel");
+const clarifyEqualizer=$("#clarifyEqualizer"),clarifyEditor=$("#clarifyEditor"),clarifyStatus=$("#clarifyStatus"),clarifyVoiceButton=$("#clarifyVoiceButton"),clarifyVoiceIcon=$("#clarifyVoiceIcon"),clarifyVoiceLabel=$("#clarifyVoiceLabel");
 
 let rows=[],catalog=[],families=[],rowSeq=0;
 let continuous=false,stream=null,recorder=null,chunks=[],analyser=null,audioContext=null,animationFrame=null,speechStarted=false,silentSince=null,recordingPurpose=null;
@@ -14,6 +14,7 @@ let discardStoppedSegment=false;
 let clarifySession=null,clarifySerial=0,resumeMainPending=false;
 let sessionLogs=[],nextSttAt=0,sttQueue=Promise.resolve(),logDownloadButton=null;
 let neuralVad=null,neuralVadReady=false,neuralVadInitPromise=null,neuralVadListening=false,lastVadProbability=0,vadSilenceSince=null;
+let mainStarting=false,mainStartSeq=0,bodyScrollY=0,clarifyRematchTimer=null;
 const sessionStartedAt=Date.now();
 const SILENCE_MS=650,RMS_THRESHOLD=.025,VOICE_ARM_MS=80,MIN_VOICED_MS=80,LOG_RETENTION_MS=120000,STT_MIN_INTERVAL_MS=3100;
 const VAD_POSITIVE_THRESHOLD=.22,VAD_NEGATIVE_THRESHOLD=.12,VAD_REDEMPTION_MS=600,VAD_MIN_SPEECH_MS=80,VAD_PRE_SPEECH_MS=500;
@@ -90,20 +91,47 @@ function installRuntimeUi(){
     logDownloadButton.onclick=()=>{haptic("tap");downloadLogs()};
   }
   const style=document.createElement("style");
-  style.dataset.runtimePatch="v0.2.3-build3";
+  style.dataset.runtimePatch="v0.2.4-build4";
   style.textContent=`
     .brand strong::after{display:none!important;content:none!important}
     .runtime-brand-title{display:flex;align-items:baseline;gap:7px;min-width:0}
     .runtime-version{font-size:10px;line-height:1;color:#9aa4b4;font-weight:650;white-space:nowrap}
     .runtime-header-actions{display:flex;align-items:center;gap:8px}
     .runtime-log-button{font-size:23px;line-height:1;color:#526074}
-    .voice-dock>.equalizer{flex:1 1 0!important;width:auto!important;min-width:0!important;display:grid!important;grid-template-columns:repeat(12,minmax(0,1fr))!important;gap:0!important;padding:0 7px!important;align-items:center!important;justify-content:stretch!important}
-    .voice-dock>.equalizer i{width:3px!important;justify-self:center!important}
+    .voice-dock>.equalizer{flex:1 1 0!important;width:auto!important;min-width:0!important;display:grid!important;grid-template-columns:repeat(var(--eq-bars,24),minmax(0,1fr))!important;gap:2px!important;padding:0 5px!important;align-items:center!important;justify-content:stretch!important}
+    .voice-dock>.equalizer i{width:2px!important;justify-self:center!important;transition:height .065s linear,opacity .1s}
     .voice-dock>.next-button{margin-left:0!important;flex:0 0 auto!important}
     .voice-dock>.play-button{flex:0 0 auto!important}
+    .unit-control-wrap{min-width:0}
     @media(max-width:560px){.voice-dock>.equalizer{padding:0 5px!important}.runtime-header-actions{gap:6px}}
   `;
   document.head.appendChild(style);
+  ensureEqualizerBars(equalizer,24);
+  ensureEqualizerBars(clarifyEqualizer,18);
+}
+function ensureEqualizerBars(target,count){
+  if(!target)return;
+  while(target.children.length<count)target.appendChild(document.createElement("i"));
+  while(target.children.length>count)target.lastElementChild.remove();
+  target.style.setProperty("--eq-bars",String(count));
+}
+function paintEqualizer(bars,rms,freqData){
+  if(!bars.length)return;
+  const maxBin=Math.max(6,Math.min(freqData.length-1,96));
+  const raw=bars.map((_,i)=>{
+    const t=bars.length<=1?0:i/(bars.length-1);
+    const center=Math.max(1,Math.round(2+Math.pow(t,1.55)*(maxBin-2)));
+    const radius=center<16?2:center<40?3:4;
+    let sum=0,count=0;
+    for(let b=Math.max(1,center-radius);b<=Math.min(maxBin,center+radius);b++){sum+=freqData[b];count++}
+    return Math.min(1,(count?sum/count/255:0)*1.32+rms*1.8);
+  });
+  bars.forEach((bar,i)=>{
+    const left=raw[Math.max(0,i-1)],mid=raw[i],right=raw[Math.min(raw.length-1,i+1)];
+    const energy=Math.min(1,(left+mid*2+right)/4);
+    bar.style.height=(6+energy*30).toFixed(1)+"px";
+    bar.style.opacity=String(Math.min(.98,.28+energy*.78));
+  });
 }
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
 async function ensureNeuralVad(){
@@ -253,7 +281,7 @@ async function bootstrap(){
   catalogText.textContent=catalog.map(x=>x.name).join("\n");
   try{const h=await api("/api/health");apiStatus.textContent="готово · "+h.catalog+" SKU";apiStatus.style.color="var(--green)"}catch{apiStatus.textContent="сервис недоступен";apiStatus.style.color="var(--danger)"}
 }
-function newRow(text=""){return{id:++rowSeq,rawText:text,text,familyId:null,familyName:"",familyCandidates:[],variantId:null,variantLabel:"",variantCandidates:[],catalogItemId:null,catalogItemName:"",quantity:"",unit:"",orderUnit:"",pending:false,editing:false,manualFamily:false,manualVariant:false}}
+function newRow(text=""){return{id:++rowSeq,rawText:text,text,familyId:null,familyName:"",familyCandidates:[],variantId:null,variantLabel:"",variantCandidates:[],catalogItemId:null,catalogItemName:"",quantity:"",unit:"",orderUnit:"",pending:false,editing:false,manualFamily:false,manualVariant:false,manualUnit:false}}
 function esc(v){return String(v??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;")}
 function option(value,label,selected=false){return '<option value="'+esc(value)+'"'+(selected?" selected":"")+'>'+esc(label)+'</option>'}
 function uniqueByValue(items){const seen=new Set();return items.filter(x=>{if(seen.has(x.value))return false;seen.add(x.value);return true})}
@@ -274,9 +302,22 @@ function variantChoices(row){
   for(const x of candidates.slice(0,3))out.push({value:x.id,label:x.label});
   return uniqueByValue(out);
 }
-function unitChoices(row){
-  return [...new Set([row.unit,row.orderUnit,"шт","мешок","лист","рулон","упаковка","кг","м"].filter(Boolean))];
+function rationalUnitChoices(row){
+  const family=families.find(x=>x.id===row.familyId);
+  const key=[family?.category,row.familyName,family?.name].filter(Boolean).join(" ").toLowerCase().replace(/ё/g,"е");
+  let allowed;
+  if(/креп|гвозд|саморез|дюбел|шуруп|болт|гайк|шайб|анкер|скоб/.test(key))allowed=["шт","упаковка","коробка","кг"];
+  else if(/смес|цемент|штукатур|шпаклев|клей|ровнител|затир/.test(key))allowed=["мешок","кг","упаковка","шт"];
+  else if(/лист|гипсокарт|фанер|osb|осп|плит/.test(key))allowed=["лист","шт","упаковка","м²"];
+  else if(/рулон|пленк|мембран|рубероид|сетка/.test(key))allowed=["рулон","м²","м","шт"];
+  else if(/труб|кабел|провод|профил|брус|рейк|плинтус/.test(key))allowed=["м","шт","упаковка"];
+  else if(/краск|грунт|лак|эмал|пропит|растворител/.test(key))allowed=["л","ведро","канистра","шт"];
+  else if(/песок|щебен|грави|керамзит/.test(key))allowed=["м³","т","кг","мешок"];
+  else allowed=[row.orderUnit,"шт","упаковка"].filter(Boolean);
+  if(row.orderUnit&&allowed.includes(row.orderUnit))allowed=[row.orderUnit,...allowed];
+  return [...new Set(allowed.filter(Boolean))];
 }
+function unitChoices(row){return rationalUnitChoices(row)}
 function parsedLabel(row){
   if(!row.familyName)return "Товар пока не определён";
   const parts=[row.familyName];
@@ -291,14 +332,17 @@ function editorHtml(row){
   const varPlaceholder=!row.variantId&&!row.manualVariant?option("","Выберите вариант",true):"";
   const famSelect=famPlaceholder+fam.map(x=>option(x.value,x.label,x.value===row.familyId)).join("")+option("__manual__","Ввести вручную",row.manualFamily);
   const varSelect=varPlaceholder+variants.map(x=>option(x.value,x.label,x.value===row.variantId)).join("")+option("__manual__","Ввести вручную",row.manualVariant);
-  const unitPlaceholder=!(row.unit||row.orderUnit)?option("","Ед.",true):"";
-  const unitSelect=unitPlaceholder+units.map(x=>option(x,x,x===(row.unit||row.orderUnit))).join("");
+  const currentUnit=row.unit||row.orderUnit||"";
+  const unitIsCustom=Boolean(row.manualUnit||(currentUnit&&!units.includes(currentUnit)));
+  const unitPlaceholder=!currentUnit&&!unitIsCustom?option("","Ед.",true):"";
+  const unitSelect=unitPlaceholder+units.map(x=>option(x,x,x===currentUnit)).join("")+option("__manual__","Другая…",unitIsCustom);
   return '<div class="inline-editor">'+
       '<div class="editor-field"><label class="editor-label">Товар</label><select class="editor-control family-select">'+famSelect+'</select>'+
         (row.manualFamily?'<input class="editor-control manual-segment family-manual" value="'+esc(row.familyName)+'" placeholder="Название товара">':'')+'</div>'+
       '<div class="editor-field"><label class="editor-label">Вариант</label><select class="editor-control variant-select">'+varSelect+'</select>'+
         (row.manualVariant?'<input class="editor-control manual-segment variant-manual" value="'+esc(row.variantLabel)+'" placeholder="Вариант SKU">':'')+'</div>'+
-      '<div class="editor-field full"><label class="editor-label">Количество</label><div class="qty-unit-row"><input class="editor-control qty-input" inputmode="decimal" value="'+esc(row.quantity)+'" placeholder="Количество"><select class="editor-control unit-select">'+unitSelect+'</select></div></div>'+
+      '<div class="editor-field full"><label class="editor-label">Количество</label><div class="qty-unit-row"><input class="editor-control qty-input" inputmode="decimal" value="'+esc(row.quantity)+'" placeholder="Количество"><div class="unit-control-wrap"><select class="editor-control unit-select">'+unitSelect+'</select>'+
+        (unitIsCustom?'<input class="editor-control manual-segment unit-manual" value="'+esc(row.unit)+'" placeholder="Единица вручную">':'')+'</div></div></div>'+
   '</div>';
 }
 function autoGrow(textarea){
@@ -340,34 +384,74 @@ function render(){
     rowsEl.appendChild(el);
   });
 }
-function bindEditor(el,row){
-  el.querySelector(".editor-done").onclick=()=>{row.editing=false;render()};
+function bindEditor(el,row,{rerender=render,onDirty=()=>{}}={}){
+  const done=el.querySelector(".editor-done");
+  if(done)done.onclick=()=>{row.editing=false;rerender()};
+  const refresh=()=>{onDirty();rerender()};
   const familySelect=el.querySelector(".family-select");
   familySelect.onchange=()=>{
     if(familySelect.value==="__manual__"){
-      row.manualFamily=true;row.familyId=null;row.familyName=row.familyName||"";row.variantId=null;row.variantLabel="";row.manualVariant=false;render();return;
+      row.manualFamily=true;row.familyId=null;row.familyName=row.familyName||"";row.variantId=null;row.variantLabel="";row.manualVariant=false;row.orderUnit="";row.unit="";row.manualUnit=false;refresh();return;
     }
     if(!familySelect.value)return;
     const f=families.find(x=>x.id===familySelect.value);
     if(!f)return;
-    row.manualFamily=false;row.familyId=f.id;row.familyName=f.name;row.orderUnit=f.orderUnit;row.unit=row.unit||f.orderUnit;
-    row.variantId=null;row.variantLabel="";row.catalogItemId=null;row.catalogItemName="";row.manualVariant=false;
+    row.manualFamily=false;row.familyId=f.id;row.familyName=f.name;row.orderUnit=f.orderUnit;
+    row.variantId=null;row.variantLabel="";row.catalogItemId=null;row.catalogItemName="";row.manualVariant=false;row.manualUnit=false;
     row.variantCandidates=(f.variants||[]).slice(0,5).map(v=>({...v,familyId:f.id,familyName:f.name,orderUnit:f.orderUnit,score:0}));
-    render();
+    const rational=rationalUnitChoices(row);row.unit=rational.includes(f.orderUnit)?f.orderUnit:(rational[0]||"");
+    refresh();
   };
   const familyManual=el.querySelector(".family-manual");
-  if(familyManual)familyManual.oninput=e=>row.familyName=e.target.value;
+  if(familyManual)familyManual.oninput=e=>{row.familyName=e.target.value;onDirty()};
   const variantSelect=el.querySelector(".variant-select");
   variantSelect.onchange=()=>{
-    if(variantSelect.value==="__manual__"){row.manualVariant=true;row.variantId=null;row.catalogItemId=null;row.catalogItemName="";render();return}
+    if(variantSelect.value==="__manual__"){row.manualVariant=true;row.variantId=null;row.catalogItemId=null;row.catalogItemName="";refresh();return}
     if(!variantSelect.value)return;
     const f=families.find(x=>x.id===row.familyId);const v=f?.variants.find(x=>x.id===variantSelect.value);
-    if(v){row.manualVariant=false;row.variantId=v.id;row.variantLabel=v.label;row.catalogItemId=v.id;row.catalogItemName=v.fullName;render()}
+    if(v){row.manualVariant=false;row.variantId=v.id;row.variantLabel=v.label;row.catalogItemId=v.id;row.catalogItemName=v.fullName;refresh()}
   };
   const variantManual=el.querySelector(".variant-manual");
-  if(variantManual)variantManual.oninput=e=>{row.variantLabel=e.target.value;row.catalogItemId=null;row.catalogItemName=""};
-  el.querySelector(".qty-input").oninput=e=>row.quantity=e.target.value;
-  el.querySelector(".unit-select").onchange=e=>row.unit=e.target.value;
+  if(variantManual)variantManual.oninput=e=>{row.variantLabel=e.target.value;row.catalogItemId=null;row.catalogItemName="";onDirty()};
+  el.querySelector(".qty-input").oninput=e=>{row.quantity=e.target.value;onDirty()};
+  const unitSelect=el.querySelector(".unit-select");
+  unitSelect.onchange=()=>{
+    if(unitSelect.value==="__manual__"){row.manualUnit=true;if(rationalUnitChoices(row).includes(row.unit))row.unit="";refresh();return}
+    row.manualUnit=false;row.unit=unitSelect.value;onDirty();
+  };
+  const unitManual=el.querySelector(".unit-manual");
+  if(unitManual)unitManual.oninput=e=>{row.manualUnit=true;row.unit=e.target.value;onDirty()};
+}
+function cloneEditorState(row){
+  return {...row,familyCandidates:[...(row.familyCandidates||[])],variantCandidates:[...(row.variantCandidates||[])],editing:true};
+}
+function copyEditorState(target,source){
+  for(const key of ["familyId","familyName","familyCandidates","variantId","variantLabel","variantCandidates","catalogItemId","catalogItemName","quantity","unit","orderUnit","manualFamily","manualVariant","manualUnit"])target[key]=Array.isArray(source[key])?[...source[key]]:source[key];
+}
+function renderClarifyEditor(){
+  const session=clarifySession;if(!session?.active||!clarifyEditor)return;
+  clarifyEditor.innerHTML=editorHtml(session.draft);
+  bindEditor(clarifyEditor,session.draft,{rerender:renderClarifyEditor,onDirty:()=>{session.structuredDirty=true}});
+}
+function lockBodyScroll(){
+  bodyScrollY=window.scrollY||0;
+  document.body.style.top="-"+bodyScrollY+"px";
+  document.body.classList.add("clarify-open");
+}
+function unlockBodyScroll(){
+  if(!document.body.classList.contains("clarify-open"))return;
+  document.body.classList.remove("clarify-open");
+  document.body.style.top="";
+  window.scrollTo(0,bodyScrollY);
+}
+async function rematchClarifyDraft(sessionId){
+  const session=clarifySession;
+  if(!session?.active||session.id!==sessionId||session.structuredDirty)return;
+  try{
+    const d=await api("/api/match",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:clarifyText.value})});
+    if(!clarifySession?.active||clarifySession.id!==sessionId||clarifySession.structuredDirty)return;
+    applyParsed(clarifySession.draft,d);renderClarifyEditor();
+  }catch(error){logEvent("clarify.match_error",{message:shortText(error.message)})}
 }
 function applyParsed(row,data){
   row.familyCandidates=data.familyCandidates||[];
@@ -376,7 +460,7 @@ function applyParsed(row,data){
   row.variantId=data.variant?.id||null;row.variantLabel=data.variant?.label||"";
   row.catalogItemId=data.variant?.id||null;row.catalogItemName=data.variant?.fullName||"";
   row.orderUnit=data.orderUnit||data.family?.orderUnit||"";
-  row.manualFamily=false;row.manualVariant=false;
+  row.manualFamily=false;row.manualVariant=false;row.manualUnit=false;
   row.quantity=data.quantity!==null&&data.quantity!==undefined?data.quantity:"";
   row.unit=data.unit||row.orderUnit||"";
   row.pending=false;
@@ -402,16 +486,31 @@ async function ensureStream(){if(stream?.active)return stream;stream=await navig
 function mime(){return["audio/webm;codecs=opus","audio/webm","audio/mp4"].find(x=>MediaRecorder.isTypeSupported(x))||""}
 async function startMain(){
   if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw new Error("Браузер не поддерживает запись");
-  logEvent("voice.main.start",voiceSnapshot());
-  continuous=true;await ensureStream();await startNeuralVad();beginRecorder({type:"new"});updateVoiceUi();
+  if(mainStarting||recorder?.state==="recording")return;
+  const token=++mainStartSeq;
+  mainStarting=true;continuous=true;
+  logEvent("voice.main.start",{...voiceSnapshot(),token});
+  updateVoiceUi();
+  try{
+    await ensureStream();
+    if(token!==mainStartSeq||!continuous)return;
+    await startNeuralVad();
+    if(token!==mainStartSeq||!continuous)return;
+    beginRecorder({type:"new"});
+  }finally{
+    if(token===mainStartSeq)mainStarting=false;
+    updateVoiceUi();
+  }
 }
 async function startClarify(rowId){
   if(clarifySession?.active)return;
   const row=rows.find(x=>x.id===rowId);if(!row)return;
   const resumeMain=continuous||(recorder?.state==="recording"&&recordingPurpose?.type==="new");
-  clarifySession={id:++clarifySerial,rowId,originalText:row.text,resumeMain,active:true,state:"preparing"};
+  clarifySession={id:++clarifySerial,rowId,originalText:row.text,resumeMain,active:true,state:"preparing",draft:cloneEditorState(row),structuredDirty:false};
   logEvent("clarify.open",{rowId,resumeMain,text:shortText(row.text)});
   clarifyText.value=row.text;
+  renderClarifyEditor();
+  lockBodyScroll();
   clarifyDialog.showModal();
   continuous=false;
   await pauseNeuralVad();
@@ -457,20 +556,20 @@ function watchLevel(){
   if(!audioContext){
     audioContext=new AudioContext();
     analyser=audioContext.createAnalyser();
-    analyser.fftSize=512;
+    analyser.fftSize=512;analyser.smoothingTimeConstant=.72;analyser.minDecibels=-85;analyser.maxDecibels=-20;
     audioContext.createMediaStreamSource(stream).connect(analyser);
   }
-  const data=new Uint8Array(analyser.fftSize);
+  const data=new Uint8Array(analyser.fftSize),freqData=new Uint8Array(analyser.frequencyBinCount);
   const target=recordingPurpose?.type==="clarifyDialog"?clarifyEqualizer:equalizer;
   const bars=[...target.querySelectorAll("i")];
   const tick=()=>{
     if(!recorder||recorder.state!=="recording")return;
     const now=performance.now(),dt=lastLevelAt?Math.min(80,now-lastLevelAt):0;lastLevelAt=now;
-    analyser.getByteTimeDomainData(data);
+    analyser.getByteTimeDomainData(data);analyser.getByteFrequencyData(freqData);
     let sum=0;
     for(const v of data){const s=(v-128)/128;sum+=s*s}
     const rms=Math.sqrt(sum/data.length);maxRms=Math.max(maxRms,rms);
-    bars.forEach((b,i)=>{const k=Math.min(1,rms*18*(.72+((i%3)+1)*.13));b.style.height=(7+k*24)+"px"});
+    paintEqualizer(bars,rms,freqData);
 
     if(!neuralVadReady){
       if(rms>RMS_THRESHOLD){
@@ -517,7 +616,7 @@ async function nextLine(){
   finalizeSegment("next");
 }
 function stopAll(){
-  continuous=false;
+  continuous=false;mainStarting=false;mainStartSeq++;
   pauseNeuralVad();
   if(recordingPurpose?.type==="new")discardStoppedSegment=!speechStarted;else discardStoppedSegment=false;
   logEvent("voice.main.stop",{speechStarted,voiceAboveMs:Math.round(voiceAboveMs),...voiceSnapshot()});
@@ -613,6 +712,7 @@ async function transcribeClarification(blob,mt,sessionId){
       clarifyText.value=base?base+" "+extra:extra;
       clarifyText.scrollTop=clarifyText.scrollHeight;
       logEvent("clarify.text_appended",{text:shortText(extra)});
+      rematchClarifyDraft(sessionId);
     }else if(extra){
       logEvent("clarify.text_discarded",{reason:"known_silence_hallucination",text:shortText(extra)});
     }
@@ -629,14 +729,17 @@ function resetStructured(row){
   row.variantId=null;row.variantLabel="";row.variantCandidates=[];
   row.catalogItemId=null;row.catalogItemName="";
   row.quantity="";row.unit="";row.orderUnit="";
-  row.manualFamily=false;row.manualVariant=false;row.editing=false;
+  row.manualFamily=false;row.manualVariant=false;row.manualUnit=false;row.editing=false;
 }
 function cancelClarify(){
   const session=clarifySession;if(!session)return;
   logEvent("clarify.cancel",{rowId:session.rowId,state:session.state,resumeMain:session.resumeMain});
   const resume=session.resumeMain;
   session.active=false;clarifySession=null;
+  clearTimeout(clarifyRematchTimer);
   if(clarifyDialog.open)clarifyDialog.close();
+  clarifyEditor.innerHTML="";
+  unlockBodyScroll();
   resetClarifyBars();
   resumeMainPending=resume;
 
@@ -653,20 +756,24 @@ function cancelClarify(){
 function acceptClarify(){
   const session=clarifySession;
   if(!session?.active||session.state!=="ready")return;
-  logEvent("clarify.accept",{rowId:session.rowId,text:shortText(clarifyText.value),resumeMain:session.resumeMain});
+  logEvent("clarify.accept",{rowId:session.rowId,text:shortText(clarifyText.value),resumeMain:session.resumeMain,structuredDirty:session.structuredDirty});
   const row=rows.find(x=>x.id===session.rowId);
   const value=clarifyText.value.trim();
-  const resume=session.resumeMain;
+  const resume=session.resumeMain,draft=session.draft,structuredDirty=session.structuredDirty;
   session.active=false;clarifySession=null;
+  clearTimeout(clarifyRematchTimer);
   if(clarifyDialog.open)clarifyDialog.close();
+  clarifyEditor.innerHTML="";
+  unlockBodyScroll();
   resetClarifyBars();
 
   if(row){
     row.text=value;row.rawText=value;
-    resetStructured(row);
-    row.pending=true;
-    render();
-    rematch(row.id,{collapse:true});
+    if(structuredDirty){
+      copyEditorState(row,draft);row.pending=false;row.editing=false;render();
+    }else{
+      resetStructured(row);row.pending=true;render();rematch(row.id,{collapse:true});
+    }
   }
 
   resumeMainPending=resume;
@@ -677,15 +784,7 @@ async function resumeMainVoice(){
   if(!resumeMainPending)return;
   if(recorder){setTimeout(resumeMainVoice,50);return}
   resumeMainPending=false;
-  continuous=true;
-  try{
-    await ensureStream();
-    if(!continuous)return;
-    await startNeuralVad();
-    beginRecorder({type:"new"});
-  }catch(error){
-    continuous=false;closeStream();toast(error.message);
-  }
+  try{await startMain()}catch(error){continuous=false;closeStream();toast(error.message)}
   updateVoiceUi();
 }
 function updateClarifyUi(){
@@ -730,19 +829,21 @@ function closeStream(){
   resetClarifyBars();
 }
 function updateVoiceUi(){
-  const live=recorder?.state==="recording",main=live&&recordingPurpose?.type==="new";
-  voiceDock.classList.toggle("live",main);
+  const live=recorder?.state==="recording",main=live&&recordingPurpose?.type==="new",preparing=mainStarting&&continuous;
+  voiceDock.classList.toggle("live",main||preparing);
   playButton.classList.remove("clarify");
   nextButton.disabled=!main;nextButton.classList.toggle("enabled",main);
   if(clarifySession?.active){
     playIcon.textContent="Ⅱ";voiceTitle.textContent="Пауза";voiceHint.textContent="Открыто уточнение";
   }else if(main){
     playIcon.textContent="Ⅱ";voiceTitle.textContent="Слушаю";voiceHint.textContent="Пауза — новая строка";
+  }else if(preparing){
+    playIcon.textContent="Ⅱ";voiceTitle.textContent="Готовлю микрофон";voiceHint.textContent="Нажмите, чтобы отменить";
   }else{
-    playIcon.textContent="▶";voiceTitle.textContent="Готов";voiceHint.textContent="Play — продолжить";
+    playIcon.textContent="🎙";voiceTitle.textContent="Готов";voiceHint.textContent="Микрофон — начать диктовку";
   }
 }
-playButton.onclick=()=>{haptic("tap");if(recorder?.state==="recording")stopAll();else startMain().catch(e=>toast(e.message))};
+playButton.onclick=()=>{haptic("tap");if(mainStarting||continuous||recorder?.state==="recording")stopAll();else startMain().catch(e=>toast(e.message))};
 nextButton.onclick=nextLine;
 clarifyVoiceButton.onclick=()=>{
   const session=clarifySession;if(!session?.active)return;
@@ -759,6 +860,11 @@ clarifyVoiceButton.onclick=()=>{
 clarifyClose.onclick=cancelClarify;
 clarifyCancel.onclick=cancelClarify;
 clarifyOk.onclick=()=>{haptic("tap");acceptClarify()};
+clarifyText.oninput=()=>{
+  const session=clarifySession;if(!session?.active||session.structuredDirty)return;
+  clearTimeout(clarifyRematchTimer);
+  clarifyRematchTimer=setTimeout(()=>rematchClarifyDraft(session.id),340);
+};
 clarifyDialog.addEventListener("cancel",event=>{event.preventDefault();cancelClarify()});
 
 async function saveRequest(){
