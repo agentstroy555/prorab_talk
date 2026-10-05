@@ -5,3 +5,10 @@
 .clarify-close{width:38px;height:38px;border:0;border-radius:11px;background:transparent;color:#667288;font-size:28px}
 .clarify-body{padding:14px 16px}
 .clarify-text{display:block;width:100%;height:132px;resize:none;overflow-y:auto;border:1px solid #cfd7e4;border-radius:13px;padding:11px 12px;line-height:22px}
+
+body.clarify-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
+.clarify-dialog{max-height:calc(100dvh - 18px);overflow:auto;overscroll-behavior:contain;touch-action:pan-y}
+.clarify-dialog::backdrop{touch-action:none}
+.clarify-body{overscroll-behavior:contain}
+.clarify-editor{margin-top:12px}
+.clarify-editor .inline-editor{margin-top:0}
