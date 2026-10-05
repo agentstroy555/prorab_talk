@@ -398,6 +398,7 @@ function updateClarifyUi(){
     clarifyVoiceLabel.textContent="Стоп";
     clarifyStatus.textContent="Слушаю уточнение…";
   }else if(state==="transcribing"){
+    resetClarifyBars();
     clarifyVoiceButton.classList.add("busy");
     clarifyVoiceIcon.innerHTML='<span class="clarify-spinner"></span>';
     clarifyVoiceLabel.textContent="Распознаём";
@@ -409,6 +410,7 @@ function updateClarifyUi(){
     clarifyStatus.textContent="Можно исправить текст или добавить ещё";
     resetClarifyBars();
   }else{
+    resetClarifyBars();
     clarifyVoiceButton.classList.add("busy");
     clarifyVoiceIcon.innerHTML='<span class="clarify-spinner"></span>';
     clarifyVoiceLabel.textContent="";
