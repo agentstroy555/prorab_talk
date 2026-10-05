@@ -48,8 +48,10 @@ function parsedLabel(row){
 }
 function editorHtml(row){
   const fam=familyChoices(row),variants=variantChoices(row),units=unitChoices(row);
-  const famSelect=fam.map(x=>option(x.value,x.label,x.value===row.familyId)).join("")+option("__manual__","Ввести вручную",row.manualFamily);
-  const varSelect=variants.map(x=>option(x.value,x.label,x.value===row.variantId)).join("")+option("__manual__","Ввести вручную",row.manualVariant);
+  const famPlaceholder=!row.familyId&&!row.manualFamily?option("","Выберите товар",true):"";
+  const varPlaceholder=!row.variantId&&!row.manualVariant?option("","Выберите вариант",true):"";
+  const famSelect=famPlaceholder+fam.map(x=>option(x.value,x.label,x.value===row.familyId)).join("")+option("__manual__","Ввести вручную",row.manualFamily);
+  const varSelect=varPlaceholder+variants.map(x=>option(x.value,x.label,x.value===row.variantId)).join("")+option("__manual__","Ввести вручную",row.manualVariant);
   const unitSelect=units.map(x=>option(x,x,x===(row.unit||row.orderUnit))).join("");
   return '<div class="inline-editor">'+
     '<div class="editor-fields">'+
@@ -96,6 +98,7 @@ function bindEditor(el,row){
     if(familySelect.value==="__manual__"){
       row.manualFamily=true;row.familyId=null;row.familyName=row.familyName||"";row.variantId=null;row.variantLabel="";row.manualVariant=false;render();return;
     }
+    if(!familySelect.value)return;
     const f=families.find(x=>x.id===familySelect.value);
     if(!f)return;
     row.manualFamily=false;row.familyId=f.id;row.familyName=f.name;row.orderUnit=f.orderUnit;row.unit=row.unit||f.orderUnit;
@@ -108,6 +111,7 @@ function bindEditor(el,row){
   const variantSelect=el.querySelector(".variant-select");
   variantSelect.onchange=()=>{
     if(variantSelect.value==="__manual__"){row.manualVariant=true;row.variantId=null;row.catalogItemId=null;row.catalogItemName="";render();return}
+    if(!variantSelect.value)return;
     const f=families.find(x=>x.id===row.familyId);const v=f?.variants.find(x=>x.id===variantSelect.value);
     if(v){row.manualVariant=false;row.variantId=v.id;row.variantLabel=v.label;row.catalogItemId=v.id;row.catalogItemName=v.fullName;render()}
   };
