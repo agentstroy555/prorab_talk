@@ -10,6 +10,7 @@ export function normalize(value) {
     .replace(/[×х]/g, "x")
     .replace(/ø/g, "o")
     .replace(/,/g, ".")
+    .replace(/\.(?=\s|$)/g, " ")
     .replace(/[^a-zа-я0-9.o²\-\/\s]/gi, " ")
     .replace(/\s+/g, " ")
     .trim();

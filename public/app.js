@@ -1,6 +1,7 @@
-const APP_VERSION="0.2.4";
-const APP_BUILD=4;
+const APP_VERSION="0.2.5";
+const APP_BUILD=5;
 const $=s=>document.querySelector(s);
+const MIC_ICON='<svg class="mic-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="10.5" rx="3" fill="currentColor"></rect><path d="M6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v4M9.5 21h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg>';
 const rowsEl=$("#rows"),emptyState=$("#emptyState"),addManualButton=$("#addManualButton"),saveButton=$("#saveButton"),saveState=$("#saveState");
 const apiStatus=$("#apiStatus"),catalogButton=$("#catalogButton"),catalogDialog=$("#catalogDialog"),catalogText=$("#catalogText");
 const toastEl=$("#toast"),voiceDock=$("#voiceDock"),equalizer=$("#equalizer"),nextButton=$("#nextButton"),playButton=$("#playButton"),playIcon=$("#playIcon"),voiceTitle=$("#voiceTitle"),voiceHint=$("#voiceHint");
@@ -91,7 +92,7 @@ function installRuntimeUi(){
     logDownloadButton.onclick=()=>{haptic("tap");downloadLogs()};
   }
   const style=document.createElement("style");
-  style.dataset.runtimePatch="v0.2.4-build4";
+  style.dataset.runtimePatch="v0.2.5-build5";
   style.textContent=`
     .brand strong::after{display:none!important;content:none!important}
     .runtime-brand-title{display:flex;align-items:baseline;gap:7px;min-width:0}
@@ -103,9 +104,17 @@ function installRuntimeUi(){
     .voice-dock>.next-button{margin-left:0!important;flex:0 0 auto!important}
     .voice-dock>.play-button{flex:0 0 auto!important}
     .unit-control-wrap{min-width:0}
+    .mic-svg{display:block;width:1em;height:1em;overflow:visible}
+    .empty-icon{display:grid;place-items:center}
+    .empty-icon .mic-svg{width:32px;height:32px}
+    .clarify-button .mic{display:grid;place-items:center}
+    .clarify-button .mic-svg{width:22px;height:22px}
+    .play-button .mic-svg{width:29px;height:29px}
+    .clarify-voice-icon .mic-svg{width:23px;height:23px}
     @media(max-width:560px){.voice-dock>.equalizer{padding:0 5px!important}.runtime-header-actions{gap:6px}}
   `;
   document.head.appendChild(style);
+  const emptyMic=document.querySelector(".empty-icon");if(emptyMic)emptyMic.innerHTML=MIC_ICON;
   ensureEqualizerBars(equalizer,24);
   ensureEqualizerBars(clarifyEqualizer,18);
 }
@@ -368,7 +377,7 @@ function render(){
         '<textarea class="voice-textarea" rows="1" placeholder="Товар, вариант, количество">'+esc(row.text)+'</textarea>'+
         '<button class="delete-row" type="button" title="Удалить">×</button>'+
       '</div></div>'+
-      '<div class="action-cell top-action"><button class="clarify-button" type="button" title="Уточнить голосом"><span class="mic">🎙</span><span class="edit-mark">✎</span></button></div>'+
+      '<div class="action-cell top-action"><button class="clarify-button" type="button" title="Уточнить голосом"><span class="mic">'+MIC_ICON+'</span><span class="edit-mark">✎</span></button></div>'+
       '<div class="structured-cell">'+lowerLeft+'</div>'+
       '<div class="action-cell bottom-action">'+lowerRight+'</div>'+
     '</div>';
@@ -808,7 +817,7 @@ function updateClarifyUi(){
     clarifyStatus.textContent="Расшифровываем голос…";
   }else if(state==="ready"){
     clarifyVoiceButton.classList.add("ready");
-    clarifyVoiceIcon.textContent="🎙";
+    clarifyVoiceIcon.innerHTML=MIC_ICON;
     clarifyVoiceLabel.textContent="";
     clarifyStatus.textContent="Можно исправить текст или добавить ещё";
     resetClarifyBars();
@@ -840,7 +849,7 @@ function updateVoiceUi(){
   }else if(preparing){
     playIcon.textContent="Ⅱ";voiceTitle.textContent="Готовлю микрофон";voiceHint.textContent="Нажмите, чтобы отменить";
   }else{
-    playIcon.textContent="🎙";voiceTitle.textContent="Готов";voiceHint.textContent="Микрофон — начать диктовку";
+    playIcon.innerHTML=MIC_ICON;voiceTitle.textContent="Готов";voiceHint.textContent="Микрофон — начать диктовку";
   }
 }
 playButton.onclick=()=>{haptic("tap");if(mainStarting||continuous||recorder?.state==="recording")stopAll();else startMain().catch(e=>toast(e.message))};
