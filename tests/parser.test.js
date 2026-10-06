@@ -43,3 +43,18 @@ test("quantity parses when SKU variant is omitted",()=>{
   assert.equal(p.quantity,3);
   assert.equal(p.unit,"шт");
 });
+
+
+test("punctuation does not hide spoken quantity unit",()=>{
+  const localCatalog={families:[{
+    id:"F3",category:"Клеи и герметики",name:"Жидкие гвозди универсальные",aliases:["жидкие гвозди"],orderUnit:"шт",
+    variants:[
+      {id:"7",label:"Стандарт",fullName:"Жидкие гвозди универсальные",aliases:[]}
+    ]
+  }]};
+  const p=parseLine("Жидкие гвозди, 50 мешков.",localCatalog);
+  assert.equal(p.family.id,"F3");
+  assert.equal(p.quantity,50);
+  assert.equal(p.unit,"мешок");
+  assert.equal(p.orderUnit,"шт");
+});
