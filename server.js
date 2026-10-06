@@ -42,8 +42,12 @@ app.post("/api/transcribe",upload.single("audio"),async(req,res)=>{
   const file=req.file;
   if(!file) return res.status(400).json({error:"audio is required"});
   if(!process.env.GROQ_API_KEY){await fs.unlink(file.path).catch(()=>{});return res.status(500).json({error:"GROQ_API_KEY is not configured"});}
+  const controller=new AbortController();let clientGone=false;
+  const abortGroq=()=>{if(!res.writableEnded){clientGone=true;controller.abort()}};
+  req.once("aborted",abortGroq);res.once("close",abortGroq);
   try{
     const bytes=await fs.readFile(file.path);
+    if(clientGone)return;
     const form=new FormData();
     form.append("file",new Blob([bytes],{type:file.mimetype||"audio/webm"}),file.originalname||"voice.webm");
     form.append("model","whisper-large-v3-turbo");
@@ -51,13 +55,20 @@ app.post("/api/transcribe",upload.single("audio"),async(req,res)=>{
     form.append("prompt","Русская разговорная речь. Стройматериалы. Формат позиции: товар, вариант или размер, затем количество. Добавляй точки и запятые.");
     form.append("response_format","json");
     form.append("temperature","0");
-    const response=await fetch("https://api.groq.com/openai/v1/audio/transcriptions",{method:"POST",headers:{Authorization:"Bearer "+process.env.GROQ_API_KEY},body:form});
+    const response=await fetch("https://api.groq.com/openai/v1/audio/transcriptions",{method:"POST",headers:{Authorization:"Bearer "+process.env.GROQ_API_KEY},body:form,signal:controller.signal});
+    if(clientGone)return;
     const payload=await response.json();
     if(!response.ok) return res.status(502).json({error:"Groq transcription failed",details:payload?.error?.message||"Unknown Groq error"});
     const text=String(payload.text||"").trim();
     res.json({text,rawText:text,...buildMatch(text)});
-  }catch(error){console.error(error);res.status(500).json({error:error.message});}
-  finally{await fs.unlink(file.path).catch(()=>{});}
+  }catch(error){
+    if(clientGone||error?.name==="AbortError")return;
+    console.error(error);
+    if(!res.headersSent&&!res.writableEnded)res.status(500).json({error:error.message});
+  }finally{
+    req.off("aborted",abortGroq);res.off("close",abortGroq);
+    await fs.unlink(file.path).catch(()=>{});
+  }
 });
 
 app.post("/api/requests",async(req,res)=>{
