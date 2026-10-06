@@ -1,5 +1,6 @@
-const APP_VERSION="0.2.5";
-const APP_BUILD=5;
+import { likelyWhisperHallucination } from "./voice-utils.js";
+const APP_VERSION="0.2.6";
+const APP_BUILD=6;
 const $=s=>document.querySelector(s);
 const MIC_ICON='<svg class="mic-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="10.5" rx="3" fill="currentColor"></rect><path d="M6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v4M9.5 21h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg>';
 const rowsEl=$("#rows"),emptyState=$("#emptyState"),addManualButton=$("#addManualButton"),saveButton=$("#saveButton"),saveState=$("#saveState");
@@ -10,12 +11,13 @@ const clarifyEqualizer=$("#clarifyEqualizer"),clarifyEditor=$("#clarifyEditor"),
 
 let rows=[],catalog=[],families=[],rowSeq=0;
 let continuous=false,stream=null,recorder=null,chunks=[],analyser=null,audioContext=null,animationFrame=null,speechStarted=false,silentSince=null,recordingPurpose=null;
-let speechCandidateSince=null,speechStartedAt=null,voiceAboveMs=0,lastLevelAt=null,recordingStartedAt=null,maxRms=0;
+let speechCandidateSince=null,speechStartedAt=null,voiceAboveMs=0,lastLevelAt=null,recordingStartedAt=null,maxRms=0,maxVadProbability=0;
 let discardStoppedSegment=false;
 let clarifySession=null,clarifySerial=0,resumeMainPending=false;
 let sessionLogs=[],nextSttAt=0,sttQueue=Promise.resolve(),logDownloadButton=null;
 let neuralVad=null,neuralVadReady=false,neuralVadInitPromise=null,neuralVadListening=false,lastVadProbability=0,vadSilenceSince=null;
 let mainStarting=false,mainStartSeq=0,bodyScrollY=0,clarifyRematchTimer=null;
+let voiceEpoch=0,pendingSttCount=0;const activeSttControllers=new Set();
 const sessionStartedAt=Date.now();
 const SILENCE_MS=650,RMS_THRESHOLD=.025,VOICE_ARM_MS=80,MIN_VOICED_MS=80,LOG_RETENTION_MS=120000,STT_MIN_INTERVAL_MS=3100;
 const VAD_POSITIVE_THRESHOLD=.22,VAD_NEGATIVE_THRESHOLD=.12,VAD_REDEMPTION_MS=600,VAD_MIN_SPEECH_MS=80,VAD_PRE_SPEECH_MS=500;
@@ -42,6 +44,9 @@ function voiceSnapshot(){
     speechStarted,
     voiceAboveMs:Math.round(voiceAboveMs||0),
     maxRms:Number((maxRms||0).toFixed(4)),
+    maxVadProbability:Number((maxVadProbability||0).toFixed(3)),
+    vadMode:neuralVadReady&&neuralVadListening?"silero":"fallback",
+    voiceEpoch,
     clarifyState:clarifySession?.state||null
   };
 }
@@ -92,7 +97,7 @@ function installRuntimeUi(){
     logDownloadButton.onclick=()=>{haptic("tap");downloadLogs()};
   }
   const style=document.createElement("style");
-  style.dataset.runtimePatch="v0.2.5-build5";
+  style.dataset.runtimePatch="v0.2.6-build6";
   style.textContent=`
     .brand strong::after{display:none!important;content:none!important}
     .runtime-brand-title{display:flex;align-items:baseline;gap:7px;min-width:0}
@@ -165,7 +170,7 @@ async function ensureNeuralVad(){
       pauseStream:async()=>undefined,
       resumeStream:async()=>{await ensureStream();return stream},
       onFrameProcessed:probs=>{
-        lastVadProbability=Number(probs?.isSpeech||0);
+        lastVadProbability=Number(probs?.isSpeech||0);maxVadProbability=Math.max(maxVadProbability,lastVadProbability);
         if(recordingPurpose?.type!=="new"||!speechStarted)return;
         const now=performance.now();
         if(lastVadProbability<VAD_NEGATIVE_THRESHOLD){
@@ -223,17 +228,6 @@ async function pauseNeuralVad(){
     logEvent("neural_vad.paused");
   }catch(error){logEvent("neural_vad.pause_error",{message:shortText(error.message)})}
 }
-function likelyWhisperHallucination(text){
-  const t=String(text||"").trim().toLowerCase().replace(/ё/g,"е");
-  if(!t)return true;
-  return [
-    /^продолжение следует[.!…]?$/,
-    /^редактор субтитров\b/,
-    /^субтитры\b.*(?:редактор|корректор|делал|делала)/,
-    /^корректор\b/,
-    /^спасибо за просмотр[.!…]?$/
-  ].some(re=>re.test(t));
-}
 function isRateLimitError(error){return error?.status===429||/rate limit/i.test(String(error?.message||""))}
 function haltMainVoiceForRateLimit(error){
   logEvent("stt.rate_limit",{message:shortText(error?.message),...voiceSnapshot()});
@@ -244,21 +238,35 @@ function haltMainVoiceForRateLimit(error){
   updateVoiceUi();
   toast("Лимит Groq: голосовой ввод поставлен на паузу. Повторите через несколько секунд.");
 }
-async function transcribeBlob(blob,mt,context,isValid=()=>true){
+async function transcribeBlob(blob,mt,context,isValid=()=>true,epoch=voiceEpoch){
+  const valid=()=>document.visibilityState==="visible"&&epoch===voiceEpoch&&isValid();
   const run=async()=>{
+    if(!valid()){logEvent("stt.cancelled",{context,stage:"before_throttle",epoch,voiceEpoch});return {cancelled:true}}
     const waitMs=Math.max(0,nextSttAt-Date.now());
-    if(waitMs){logEvent("stt.throttle",{context,waitMs});await sleep(waitMs)}
-    if(!isValid()){logEvent("stt.cancelled",{context,stage:"before_request"});return {cancelled:true}}
+    if(waitMs){logEvent("stt.throttle",{context,waitMs,epoch});await sleep(waitMs)}
+    if(!valid()){logEvent("stt.cancelled",{context,stage:"before_request",epoch,voiceEpoch});return {cancelled:true}}
     nextSttAt=Date.now()+STT_MIN_INTERVAL_MS;
-    logEvent("stt.request",{context,bytes:blob.size,mime:mt});
+    logEvent("stt.request",{context,bytes:blob.size,mime:mt,epoch});
     const form=new FormData(),ext=mt.includes("mp4")?"m4a":"webm";
     form.append("audio",blob,"voice."+ext);
-    const d=await api("/api/transcribe",{method:"POST",body:form});
-    logEvent("stt.result",{context,text:shortText(d.text||""),rawText:shortText(d.rawText||"")});
-    return d;
+    const controller=new AbortController();activeSttControllers.add(controller);
+    try{
+      const d=await api("/api/transcribe",{method:"POST",body:form,signal:controller.signal});
+      if(!valid()){logEvent("stt.cancelled",{context,stage:"after_response",epoch,voiceEpoch});return {cancelled:true}}
+      logEvent("stt.result",{context,text:shortText(d.text||""),rawText:shortText(d.rawText||""),epoch});
+      return d;
+    }catch(error){
+      if(error?.name==="AbortError"||!valid()){
+        logEvent("stt.cancelled",{context,stage:"request_aborted",epoch,voiceEpoch});
+        return {cancelled:true};
+      }
+      throw error;
+    }finally{activeSttControllers.delete(controller)}
   };
+  pendingSttCount++;
   const p=sttQueue.then(run,run);
   sttQueue=p.catch(()=>{});
+  p.then(()=>{pendingSttCount=Math.max(0,pendingSttCount-1)},()=>{pendingSttCount=Math.max(0,pendingSttCount-1)});
   return p;
 }
 function toast(message){toastEl.textContent=message;toastEl.classList.add("show");clearTimeout(toastEl._t);toastEl._t=setTimeout(()=>toastEl.classList.remove("show"),2200)}
@@ -551,12 +559,12 @@ async function startClarifyRecording(){
   }
 }
 function beginRecorder(purpose){
-  recordingPurpose=purpose;chunks=[];speechStarted=false;silentSince=null;speechCandidateSince=null;speechStartedAt=null;voiceAboveMs=0;lastLevelAt=null;recordingStartedAt=performance.now();maxRms=0;vadSilenceSince=null;setSilenceProgress(0);
+  recordingPurpose={...purpose,epoch:voiceEpoch};chunks=[];speechStarted=false;silentSince=null;speechCandidateSince=null;speechStartedAt=null;voiceAboveMs=0;lastLevelAt=null;recordingStartedAt=performance.now();maxRms=0;maxVadProbability=0;vadSilenceSince=null;setSilenceProgress(0);
   const mt=mime();recorder=mt?new MediaRecorder(stream,{mimeType:mt}):new MediaRecorder(stream);
   recorder.ondataavailable=e=>{if(e.data?.size)chunks.push(e.data)};
   recorder.onstop=onRecorderStop;
   recorder.start(200);
-  logEvent("recorder.start",{purpose:purpose?.type||null,mime:recorder.mimeType||mt,threshold:RMS_THRESHOLD,voiceArmMs:VOICE_ARM_MS});
+  logEvent("recorder.start",{purpose:recordingPurpose?.type||null,epoch:recordingPurpose?.epoch,mime:recorder.mimeType||mt,threshold:RMS_THRESHOLD,voiceArmMs:VOICE_ARM_MS,vadMode:neuralVadReady&&neuralVadListening?"silero":"fallback"});
   watchLevel();
   updateVoiceUi();
 }
@@ -642,10 +650,22 @@ async function onRecorderStop(){
     durationMs:Math.round(performance.now()-(recordingStartedAt||performance.now())),
     speechStarted,
     voiceAboveMs:Math.round(voiceAboveMs),
-    maxRms:Number(maxRms.toFixed(4))
+    maxRms:Number(maxRms.toFixed(4)),
+    lastVadProbability:Number(lastVadProbability.toFixed(3)),
+    maxVadProbability:Number(maxVadProbability.toFixed(3)),
+    vadMode:neuralVadReady?"silero":"fallback",
+    epoch:purpose?.epoch??null
   };
-  recorder=null;chunks=[];
+  recorder=null;chunks=[];recordingPurpose=null;
   logEvent("recorder.stop",metrics);
+
+  const invalidContext=!purpose||purpose.epoch!==voiceEpoch||document.visibilityState!=="visible"||Boolean(purpose.discardReason);
+  if(invalidContext){
+    const reason=purpose?.discardReason||"stale_or_hidden";
+    logEvent(purpose?.type==="clarifyDialog"?"clarify.audio_discarded":"segment.discarded",{reason,voiceEpoch,...metrics});
+    closeStream();updateVoiceUi();if(clarifySession?.active)updateClarifyUi();
+    return;
+  }
 
   if(purpose?.type==="clarifyDialog"){
     resetClarifyBars();
@@ -655,7 +675,7 @@ async function onRecorderStop(){
       if(resumeMainPending)setTimeout(resumeMainVoice,30);else closeStream();
       return;
     }
-    await transcribeClarification(blob,mt,purpose.sessionId);
+    await transcribeClarification(blob,mt,purpose.sessionId,purpose.epoch);
     return;
   }
 
@@ -687,7 +707,8 @@ async function onRecorderStop(){
   if(purpose?.type!=="new"||(!forcedByNext&&blob.size<500))return;
 
   try{
-    const d=await transcribeBlob(blob,mt,"main");
+    const d=await transcribeBlob(blob,mt,"main",()=>true,purpose.epoch);
+    if(d?.cancelled)return;
     const text=String(d?.text||"").trim();
     if(!text){logEvent("stt.discarded",{reason:"empty_text",...metrics});return}
     if(likelyWhisperHallucination(text)){
@@ -702,7 +723,7 @@ async function onRecorderStop(){
     toast(e.message);
   }
 }
-async function transcribeClarification(blob,mt,sessionId){
+async function transcribeClarification(blob,mt,sessionId,epoch){
   const session=clarifySession;
   if(!session?.active||session.id!==sessionId)return;
   session.state="transcribing";
@@ -712,7 +733,7 @@ async function transcribeClarification(blob,mt,sessionId){
     session.state="ready";updateClarifyUi();return;
   }
   try{
-    const d=await transcribeBlob(blob,mt,"clarify",()=>Boolean(clarifySession?.active&&clarifySession.id===sessionId));
+    const d=await transcribeBlob(blob,mt,"clarify",()=>Boolean(clarifySession?.active&&clarifySession.id===sessionId),epoch);
     if(d?.cancelled)return;
     if(!clarifySession?.active||clarifySession.id!==sessionId)return;
     const extra=String(d.text||"").trim();
@@ -795,6 +816,23 @@ async function resumeMainVoice(){
   resumeMainPending=false;
   try{await startMain()}catch(error){continuous=false;closeStream();toast(error.message)}
   updateVoiceUi();
+}
+function hardAbortVoice(reason="document_hidden"){
+  const hadVoice=mainStarting||continuous||Boolean(recorder)||resumeMainPending||pendingSttCount>0||activeSttControllers.size>0||Boolean(clarifySession?.active&&["preparing","recording","transcribing"].includes(clarifySession.state));
+  const previousEpoch=voiceEpoch;voiceEpoch++;
+  continuous=false;resumeMainPending=false;mainStarting=false;mainStartSeq++;discardStoppedSegment=true;
+  const activeRequests=activeSttControllers.size;
+  activeSttControllers.forEach(controller=>controller.abort());activeSttControllers.clear();
+  pauseNeuralVad();cancelAnimationFrame(animationFrame);setSilenceProgress(0);
+  if(clarifySession?.active){
+    clarifySession.resumeMain=false;
+    if(["preparing","recording","transcribing"].includes(clarifySession.state))clarifySession.state="ready";
+  }
+  if(recordingPurpose)recordingPurpose.discardReason=reason;
+  if(hadVoice)logEvent("voice.hard_abort",{reason,previousEpoch,voiceEpoch,pendingSttCount,activeRequests,...voiceSnapshot()});
+  if(recorder?.state==="recording")recorder.stop();
+  else{chunks=[];recordingPurpose=null;closeStream()}
+  updateVoiceUi();if(clarifySession?.active)updateClarifyUi();
 }
 function updateClarifyUi(){
   const session=clarifySession;if(!session)return;
@@ -889,6 +927,8 @@ addManualButton.onclick=addManual;saveButton.onclick=saveRequest;catalogButton.o
 document.querySelectorAll(".close-dialog").forEach(b=>b.onclick=()=>b.closest("dialog").close());
 catalogDialog.addEventListener("click",e=>{if(e.target===catalogDialog)catalogDialog.close()});
 window.addEventListener("error",event=>logEvent("window.error",{message:shortText(event.message),source:event.filename||null,line:event.lineno||null,col:event.colno||null}));
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="hidden")hardAbortVoice("visibility_hidden")});
+window.addEventListener("pagehide",()=>hardAbortVoice("pagehide"));
 window.addEventListener("unhandledrejection",event=>logEvent("window.unhandledrejection",{message:shortText(event.reason?.message||event.reason)}));
 window.addEventListener("beforeunload",closeStream);
 installRuntimeUi();
