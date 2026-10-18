@@ -52,7 +52,7 @@ app.post("/api/transcribe",upload.single("audio"),async(req,res)=>{
     form.append("file",new Blob([bytes],{type:file.mimetype||"audio/webm"}),file.originalname||"voice.webm");
     form.append("model","whisper-large-v3-turbo");
     form.append("language","ru");
-    form.append("prompt","Русская разговорная речь. Стройматериалы. Формат позиции: товар, вариант или размер, затем количество. Добавляй точки и запятые.");
+    form.append("prompt","Стройматериалы: наименования, размеры, количества и единицы измерения. Добавляй точки и запятые.");
     form.append("response_format","json");
     form.append("temperature","0");
     const response=await fetch("https://api.groq.com/openai/v1/audio/transcriptions",{method:"POST",headers:{Authorization:"Bearer "+process.env.GROQ_API_KEY},body:form,signal:controller.signal});
