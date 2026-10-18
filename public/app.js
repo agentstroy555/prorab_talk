@@ -1,6 +1,6 @@
-import { likelyWhisperHallucination } from "./voice-utils.js";
-const APP_VERSION="0.2.6";
-const APP_BUILD=6;
+import { likelyWhisperHallucination, createVadEvidence, recordVadFrame, admitAutomaticSegment } from "./voice-utils.js";
+const APP_VERSION="0.2.7";
+const APP_BUILD=7;
 const $=s=>document.querySelector(s);
 const MIC_ICON='<svg class="mic-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="10.5" rx="3" fill="currentColor"></rect><path d="M6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v4M9.5 21h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg>';
 const rowsEl=$("#rows"),emptyState=$("#emptyState"),addManualButton=$("#addManualButton"),saveButton=$("#saveButton"),saveState=$("#saveState");
@@ -15,7 +15,7 @@ let speechCandidateSince=null,speechStartedAt=null,voiceAboveMs=0,lastLevelAt=nu
 let discardStoppedSegment=false;
 let clarifySession=null,clarifySerial=0,resumeMainPending=false;
 let sessionLogs=[],nextSttAt=0,sttQueue=Promise.resolve(),logDownloadButton=null;
-let neuralVad=null,neuralVadReady=false,neuralVadInitPromise=null,neuralVadListening=false,lastVadProbability=0,vadSilenceSince=null;
+let neuralVad=null,neuralVadReady=false,neuralVadInitPromise=null,neuralVadStartPromise=null,neuralVadListening=false,lastVadProbability=0,vadSilenceSince=null,vadFrameAt=null,vadEvidence=createVadEvidence();
 let mainStarting=false,mainStartSeq=0,bodyScrollY=0,clarifyRematchTimer=null;
 let voiceEpoch=0,pendingSttCount=0;const activeSttControllers=new Set();
 const sessionStartedAt=Date.now();
@@ -45,7 +45,7 @@ function voiceSnapshot(){
     voiceAboveMs:Math.round(voiceAboveMs||0),
     maxRms:Number((maxRms||0).toFixed(4)),
     maxVadProbability:Number((maxVadProbability||0).toFixed(3)),
-    vadMode:neuralVadReady&&neuralVadListening?"silero":"fallback",
+    vadMode:recordingPurpose?.type==="new"?(recordingPurpose.fallbackGate?"fallback":"silero"):(neuralVadReady&&neuralVadListening?"silero":"fallback"),
     voiceEpoch,
     clarifyState:clarifySession?.state||null
   };
@@ -97,7 +97,7 @@ function installRuntimeUi(){
     logDownloadButton.onclick=()=>{haptic("tap");downloadLogs()};
   }
   const style=document.createElement("style");
-  style.dataset.runtimePatch="v0.2.6-build6";
+  style.dataset.runtimePatch="v0.2.7-build7";
   style.textContent=`
     .brand strong::after{display:none!important;content:none!important}
     .runtime-brand-title{display:flex;align-items:baseline;gap:7px;min-width:0}
@@ -171,8 +171,10 @@ async function ensureNeuralVad(){
       resumeStream:async()=>{await ensureStream();return stream},
       onFrameProcessed:probs=>{
         lastVadProbability=Number(probs?.isSpeech||0);maxVadProbability=Math.max(maxVadProbability,lastVadProbability);
-        if(recordingPurpose?.type!=="new"||!speechStarted)return;
-        const now=performance.now();
+        const now=performance.now(),frameMs=vadFrameAt===null?32:Math.min(64,Math.max(16,now-vadFrameAt));
+        vadFrameAt=now;
+        if(recordingPurpose?.type==="new"&&recorder?.state==="recording"&&!recordingPurpose.fallbackGate)recordVadFrame(vadEvidence,lastVadProbability,frameMs);
+        if(recordingPurpose?.type!=="new"||recordingPurpose.fallbackGate||!speechStarted)return;
         if(lastVadProbability<VAD_NEGATIVE_THRESHOLD){
           if(vadSilenceSince===null)vadSilenceSince=now;
           setSilenceProgress(Math.min(1,(now-vadSilenceSince)/VAD_REDEMPTION_MS));
@@ -180,15 +182,15 @@ async function ensureNeuralVad(){
           vadSilenceSince=null;setSilenceProgress(0);
         }
       },
-      onSpeechStart:()=>logEvent("neural_vad.speech_start",{probability:Number(lastVadProbability.toFixed(3))}),
+      onSpeechStart:()=>{if(recordingPurpose?.type==="new"&&!recordingPurpose.fallbackGate)logEvent("neural_vad.speech_start",{probability:Number(lastVadProbability.toFixed(3))})},
       onSpeechRealStart:()=>{
-        if(recordingPurpose?.type!=="new"||recorder?.state!=="recording")return;
+        if(recordingPurpose?.type!=="new"||recordingPurpose.fallbackGate||recorder?.state!=="recording")return;
         speechStarted=true;speechStartedAt=performance.now();voiceAboveMs=Math.max(voiceAboveMs,VAD_MIN_SPEECH_MS);
         vadSilenceSince=null;setSilenceProgress(0);
         logEvent("neural_vad.speech_real_start",{probability:Number(lastVadProbability.toFixed(3))});
       },
       onSpeechEnd:()=>{
-        if(recordingPurpose?.type!=="new"||recorder?.state!=="recording")return;
+        if(recordingPurpose?.type!=="new"||recordingPurpose.fallbackGate||recorder?.state!=="recording")return;
         logEvent("neural_vad.speech_end",{probability:Number(lastVadProbability.toFixed(3))});
         haptic("commit");finalizeSegment("vad_end");
       },
@@ -205,20 +207,33 @@ async function ensureNeuralVad(){
   }).finally(()=>{neuralVadInitPromise=null});
   return neuralVadInitPromise;
 }
-async function startNeuralVad(){
-  const ok=await ensureNeuralVad();
-  if(!ok)return false;
-  if(neuralVadListening)return true;
-  try{
-    await neuralVad.start();
-    neuralVadListening=true;vadSilenceSince=null;
-    logEvent("neural_vad.started");
-    return true;
-  }catch(error){
-    neuralVadReady=false;neuralVadListening=false;
-    logEvent("neural_vad.start_error",{message:shortText(error.message)});
-    return false;
-  }
+async function startNeuralVad(expectedEpoch=voiceEpoch,expectedToken=mainStartSeq){
+  const active=()=>expectedEpoch===voiceEpoch&&expectedToken===mainStartSeq&&continuous&&document.visibilityState==="visible";
+  if(neuralVadStartPromise)await neuralVadStartPromise;
+  if(!active())return false;
+  const task=(async()=>{
+    const ok=await ensureNeuralVad();
+    if(!ok||!active())return false;
+    if(neuralVadListening)return true;
+    try{
+      await neuralVad.start();
+      if(!active()){
+        await neuralVad.pause();neuralVadListening=false;vadSilenceSince=null;
+        logEvent("neural_vad.late_start_cancelled",{expectedEpoch,expectedToken});
+        return false;
+      }
+      neuralVadListening=true;vadSilenceSince=null;vadFrameAt=null;
+      logEvent("neural_vad.started",{expectedEpoch,expectedToken});
+      return true;
+    }catch(error){
+      neuralVadReady=false;neuralVadListening=false;
+      logEvent("neural_vad.start_error",{message:shortText(error.message)});
+      return false;
+    }
+  })();
+  neuralVadStartPromise=task;
+  try{return await task}
+  finally{if(neuralVadStartPromise===task)neuralVadStartPromise=null}
 }
 async function pauseNeuralVad(){
   if(!neuralVadReady||!neuralVad||!neuralVadListening)return;
@@ -503,17 +518,21 @@ async function ensureStream(){if(stream?.active)return stream;stream=await navig
 function mime(){return["audio/webm;codecs=opus","audio/webm","audio/mp4"].find(x=>MediaRecorder.isTypeSupported(x))||""}
 async function startMain(){
   if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw new Error("Браузер не поддерживает запись");
-  if(mainStarting||recorder?.state==="recording")return;
-  const token=++mainStartSeq;
+  if(mainStarting||recorder)return;
+  const token=++mainStartSeq,epoch=voiceEpoch;
   mainStarting=true;continuous=true;
   logEvent("voice.main.start",{...voiceSnapshot(),token});
   updateVoiceUi();
   try{
     await ensureStream();
-    if(token!==mainStartSeq||!continuous)return;
-    await startNeuralVad();
-    if(token!==mainStartSeq||!continuous)return;
+    if(token!==mainStartSeq||epoch!==voiceEpoch||!continuous||document.visibilityState!=="visible"){
+      if(!recorder)closeStream();
+      logEvent("voice.main.start_cancelled",{token,epoch});
+      return;
+    }
     beginRecorder({type:"new"});
+    logEvent("voice.main.recording_while_vad_loads",{token,mode:recordingPurpose?.fallbackGate?"fallback":"silero"});
+    void startNeuralVad(epoch,token);
   }finally{
     if(token===mainStartSeq)mainStarting=false;
     updateVoiceUi();
@@ -559,12 +578,12 @@ async function startClarifyRecording(){
   }
 }
 function beginRecorder(purpose){
-  recordingPurpose={...purpose,epoch:voiceEpoch};chunks=[];speechStarted=false;silentSince=null;speechCandidateSince=null;speechStartedAt=null;voiceAboveMs=0;lastLevelAt=null;recordingStartedAt=performance.now();maxRms=0;maxVadProbability=0;vadSilenceSince=null;setSilenceProgress(0);
+  recordingPurpose={...purpose,epoch:voiceEpoch,fallbackGate:!neuralVadListening};chunks=[];speechStarted=false;silentSince=null;speechCandidateSince=null;speechStartedAt=null;voiceAboveMs=0;lastLevelAt=null;recordingStartedAt=performance.now();maxRms=0;maxVadProbability=0;vadEvidence=createVadEvidence();vadFrameAt=null;vadSilenceSince=null;setSilenceProgress(0);
   const mt=mime();recorder=mt?new MediaRecorder(stream,{mimeType:mt}):new MediaRecorder(stream);
   recorder.ondataavailable=e=>{if(e.data?.size)chunks.push(e.data)};
   recorder.onstop=onRecorderStop;
   recorder.start(200);
-  logEvent("recorder.start",{purpose:recordingPurpose?.type||null,epoch:recordingPurpose?.epoch,mime:recorder.mimeType||mt,threshold:RMS_THRESHOLD,voiceArmMs:VOICE_ARM_MS,vadMode:neuralVadReady&&neuralVadListening?"silero":"fallback"});
+  logEvent("recorder.start",{purpose:recordingPurpose?.type||null,epoch:recordingPurpose?.epoch,mime:recorder.mimeType||mt,threshold:RMS_THRESHOLD,voiceArmMs:VOICE_ARM_MS,vadMode:recordingPurpose.fallbackGate?"fallback":"silero"});
   watchLevel();
   updateVoiceUi();
 }
@@ -588,7 +607,7 @@ function watchLevel(){
     const rms=Math.sqrt(sum/data.length);maxRms=Math.max(maxRms,rms);
     paintEqualizer(bars,rms,freqData);
 
-    if(!neuralVadReady){
+    if(recordingPurpose?.fallbackGate){
       if(rms>RMS_THRESHOLD){
         if(!speechStarted){
           if(speechCandidateSince===null)speechCandidateSince=now;
@@ -653,7 +672,8 @@ async function onRecorderStop(){
     maxRms:Number(maxRms.toFixed(4)),
     lastVadProbability:Number(lastVadProbability.toFixed(3)),
     maxVadProbability:Number(maxVadProbability.toFixed(3)),
-    vadMode:neuralVadReady?"silero":"fallback",
+    vadMode:purpose?.fallbackGate?"fallback":"silero",
+    vadEvidence:{...vadEvidence,positiveMs:Math.round(vadEvidence.positiveMs),strongMs:Math.round(vadEvidence.strongMs),veryStrongMs:Math.round(vadEvidence.veryStrongMs)},
     epoch:purpose?.epoch??null
   };
   recorder=null;chunks=[];recordingPurpose=null;
@@ -681,18 +701,23 @@ async function onRecorderStop(){
 
   const discardFlag=purpose?.type==="new"&&discardStoppedSegment;if(discardFlag)discardStoppedSegment=false;
   const forcedByNext=purpose?.type==="new"&&purpose?.finalizeReason==="next";
-  const vadMeaningful=neuralVadReady?speechStarted:(speechStarted&&voiceAboveMs>=MIN_VOICED_MS);
+  const vadMeaningful=speechStarted&&(!purpose?.fallbackGate||voiceAboveMs>=MIN_VOICED_MS);
   const meaningful=purpose?.type==="new"&&(forcedByNext?blob.size>0:(vadMeaningful&&blob.size>=500));
-  const shouldDiscard=purpose?.type==="new"&&(discardFlag||!meaningful);
+  const admission=admitAutomaticSegment(vadEvidence,{mode:purpose?.fallbackGate?"fallback":"silero",voicedMs:voiceAboveMs});
+  const shouldDiscard=purpose?.type==="new"&&(discardFlag||!meaningful||(!forcedByNext&&!admission.send));
+  if(purpose?.type==="new"&&meaningful&&!discardFlag){
+    logEvent("segment.admission",{send:forcedByNext||admission.send,reason:forcedByNext?"manual_next":admission.reason,forcedByNext,...metrics});
+  }
 
   if(purpose?.type==="new"&&clarifySession?.active&&clarifySession.state==="preparing"){
     setTimeout(()=>startClarifyRecording(),50);
   }else if(purpose?.type==="new"&&continuous){
+    const expectedEpoch=purpose.epoch,expectedToken=mainStartSeq;
     setTimeout(async()=>{
-      if(continuous&&stream?.active&&!recorder){
-        if(purpose?.restartVad)await startNeuralVad();
-        beginRecorder({type:"new"});
-      }
+      if(!continuous||expectedEpoch!==voiceEpoch||expectedToken!==mainStartSeq||!stream?.active||recorder||document.visibilityState!=="visible")return;
+      if(purpose?.restartVad)await startNeuralVad(expectedEpoch,expectedToken);
+      if(!continuous||expectedEpoch!==voiceEpoch||expectedToken!==mainStartSeq||!stream?.active||recorder||document.visibilityState!=="visible")return;
+      beginRecorder({type:"new"});
     },90);
   }else if(!resumeMainPending){
     closeStream();
@@ -701,7 +726,7 @@ async function onRecorderStop(){
   updateVoiceUi();
 
   if(shouldDiscard){
-    logEvent("segment.discarded",{reason:discardFlag?"explicit_discard":"insufficient_voice",forcedByNext,neuralVadReady,vadProbability:Number(lastVadProbability.toFixed(3)),minVoicedMs:MIN_VOICED_MS,...metrics});
+    logEvent("segment.discarded",{reason:discardFlag?"explicit_discard":!meaningful?"insufficient_voice":admission.reason,stage:"before_stt",forcedByNext,neuralVadReady,vadProbability:Number(lastVadProbability.toFixed(3)),minVoicedMs:MIN_VOICED_MS,...metrics});
     return;
   }
   if(purpose?.type!=="new"||(!forcedByNext&&blob.size<500))return;
