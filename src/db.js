@@ -95,3 +95,5 @@ export async function savePurchaseRequest(items) {
   }catch(error){ await client.query("rollback"); throw error; }
   finally{ client.release(); }
 }
+
+export async function closeDb(){ await pool.end(); }

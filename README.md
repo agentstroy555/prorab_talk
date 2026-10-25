@@ -1,4 +1,4 @@
-# Прораб Talk — MVP v0.2
+# Прораб Talk + Parabtalk — v0.3.4 (build 12)
 
 Мобильный voice-first прототип Agent Stroy для создания заявки на стройматериалы.
 
@@ -23,7 +23,7 @@
 
 ## Локальный запуск
 
-Node.js 20+ и PostgreSQL.
+Node.js 24.x и PostgreSQL.
 
 ```bash
 cp .env.example .env
@@ -36,6 +36,14 @@ npm run dev
 
 ## Render
 
-`render.yaml` создаёт web service и PostgreSQL. `DATABASE_URL` связывается с Blueprint-базой автоматически, `GROQ_API_KEY` вводится как secret environment variable.
+Для существующего Render service: [инструкция web + Telegram](docs/RENDER.md). По умолчанию TELEGRAM_ENABLED=false сохраняет web-only запуск.
+
+`render.yaml` описывает прежний free web baseline и PostgreSQL, без включённого бота. `DATABASE_URL` связывается с Blueprint-базой автоматически, `GROQ_API_KEY` вводится как secret environment variable.
 
 <!-- repair staging write check -->
+
+## Telegram в том же сервисе
+
+`npm start` запускает один сервер для сайта и опционального бота. Каталог и parser общие; web-заявки остаются в PostgreSQL, Telegram-данные — SQLite на постоянном диске. Сметы между каналами автоматически не синхронизируются. Новых web UX функций этот релиз не добавляет.
+
+Проверки из корня: `npm run check`, `npm test`, `npm run demo:telegram`. Подробности бота: [telegram/README.md](telegram/README.md). Токен задаётся в Render Environment; в публичных исходниках секрета нет.

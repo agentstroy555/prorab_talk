@@ -1,0 +1,16 @@
+{
+  "name": "agent-stroy-telegram",
+  "version": "0.3.4",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/main.js",
+    "check": "node scripts/check.mjs",
+    "test": "node --test test/*.test.js",
+    "demo": "node scripts/demo.mjs",
+    "backup": "node --env-file-if-exists=.env scripts/backup.mjs"
+  }
+}

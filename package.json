@@ -1,19 +1,20 @@
 {
   "name": "prorab-talk",
-  "version": "0.2.7",
+  "version": "0.3.4",
   "private": true,
   "type": "module",
   "description": "Agent Stroy MVP: voice construction procurement input",
   "engines": {
-    "node": ">=20"
+    "node": ">=24 <25"
   },
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "check": "node --check server.js && node --check src/db.js && node --check src/matcher.js && node --check src/parser.js && node --check public/voice-utils.js && node --check public/app.js",
-    "test": "node --test tests/*.test.js",
+    "check": "node --check server.js && node --check src/db.js && node --check src/matcher.js && node --check src/parser.js && node --check public/voice-utils.js && node --check public/app.js && node --check src/service.js && npm --prefix telegram run check",
+    "test": "node --test tests/*.test.js && npm --prefix telegram test",
     "copy:vad": "node scripts/copy-vad-assets.mjs",
-    "postinstall": "npm run copy:vad"
+    "postinstall": "npm run copy:vad",
+    "demo:telegram": "npm --prefix telegram run demo"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

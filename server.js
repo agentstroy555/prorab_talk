@@ -4,7 +4,7 @@ import multer from "multer";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { initDb, healthcheck, savePurchaseRequest } from "./src/db.js";
+import * as database from "./src/db.js";
 import { flattenCatalog, normalize } from "./src/matcher.js";
 import { parseLine } from "./src/parser.js";
 
@@ -13,15 +13,17 @@ const __dirname=path.dirname(__filename);
 const structuredCatalog=JSON.parse(await fs.readFile(path.join(__dirname,"data","catalog-structured.json"),"utf8"));
 const catalog=flattenCatalog(structuredCatalog);
 
+export function createApp({db=database,botStatus=()=>({enabled:false}),fetcher=fetch}={}){
 const app=express();
 const upload=multer({dest:"/tmp/prorab-talk",limits:{fileSize:25*1024*1024}});
+app.all("/telegram/webhook",(_req,res)=>res.status(404).json({ok:false}));
 app.use(express.json({limit:"1mb"}));
 app.use(express.static(path.join(__dirname,"public")));
 
 function buildMatch(text){ return parseLine(text,structuredCatalog); }
 
-app.get("/api/health",async(_req,res)=>{
-  try{await healthcheck();res.json({ok:true,catalog:catalog.length,families:structuredCatalog.families.length});}
+app.get(["/api/health","/health"],async(_req,res)=>{
+  try{await db.healthcheck();const telegram=botStatus();const ok=!telegram.enabled||telegram.ready;res.status(ok?200:503).json({ok,catalog:catalog.length,families:structuredCatalog.families.length,telegram});}
   catch(error){res.status(503).json({ok:false,error:error.message});}
 });
 
@@ -55,7 +57,7 @@ app.post("/api/transcribe",upload.single("audio"),async(req,res)=>{
     form.append("prompt","Стройматериалы: наименования, размеры, количества и единицы измерения. Добавляй точки и запятые.");
     form.append("response_format","json");
     form.append("temperature","0");
-    const response=await fetch("https://api.groq.com/openai/v1/audio/transcriptions",{method:"POST",headers:{Authorization:"Bearer "+process.env.GROQ_API_KEY},body:form,signal:controller.signal});
+    const response=await fetcher("https://api.groq.com/openai/v1/audio/transcriptions",{method:"POST",headers:{Authorization:"Bearer "+process.env.GROQ_API_KEY},body:form,signal:controller.signal});
     if(clientGone)return;
     const payload=await response.json();
     if(!response.ok) return res.status(502).json({error:"Groq transcription failed",details:payload?.error?.message||"Unknown Groq error"});
@@ -74,11 +76,16 @@ app.post("/api/transcribe",upload.single("audio"),async(req,res)=>{
 app.post("/api/requests",async(req,res)=>{
   const items=Array.isArray(req.body?.items)?req.body.items:[];
   if(!items.length) return res.status(400).json({error:"items are required"});
-  try{res.status(201).json(await savePurchaseRequest(items));}
+  try{res.status(201).json(await db.savePurchaseRequest(items));}
   catch(error){console.error(error);res.status(500).json({error:error.message});}
 });
 
 app.get("/{*splat}",(_req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
-const port=Number(process.env.PORT||3000);
-initDb(catalog).then(()=>app.listen(port,"0.0.0.0",()=>console.log("Prorab Talk v0.2 on "+port+"; sku="+catalog.length+" families="+structuredCatalog.families.length)))
-.catch(error=>{console.error("Failed to initialize database",error);process.exit(1);});
+return app;
+}
+
+export { catalog };
+
+if(process.argv[1]&&path.resolve(process.argv[1])===__filename){
+  import("./src/service.js").then(({startCombined})=>startCombined()).catch(()=>{console.error("Service startup/runtime failed; check database, Telegram settings and persistent disk.");process.exitCode=1;});
+}
