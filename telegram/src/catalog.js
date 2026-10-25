@@ -10,7 +10,13 @@ export function parse(text) {
   // Never infer a mass SKU from a requested volume or consume one bare number twice.
   if (p.variant) {
     const vm = extractMeasures(p.variant.label).measures;
-    const conflictingUnit = vm.some(v => measures.some(m => m.value === v.value && m.unit !== v.unit));
+    // Order counts (30 bags) are independent of package measures (30 kg).
+    // A matching explicit physical measure also takes priority over another
+    // physical measure that belongs to the requested order quantity.
+    const physical = measures.filter(m => m.kind === 'physical');
+    const conflictingUnit = vm.some(v =>
+      !physical.some(m => m.value === v.value && m.unit === v.unit) &&
+      physical.some(m => m.value === v.value && m.unit !== v.unit));
     if (conflictingUnit || (singleNumber && measures.length === 0 && p.quantity !== null)) p.variant = null;
   }
   if (p.family && p.family.score < 0.4) { p.family = null; p.variant = null; }

@@ -1,6 +1,6 @@
 # Размещение
 
-Актуальный путь: [Render Free + Neon](../../docs/RENDER.md), v0.3.6 build 14.
+Актуальный путь: [Render Free + Neon](../../docs/RENDER.md), v0.3.7 build 15.
 Один существующий Web Service, корневая команда npm start. Постоянный диск не нужен.
 Встроенный по разрешению владельца токен включает бота автоматически на Render; старый TELEGRAM_ENABLED=false не блокирует запуск. Render webhook регистрируется кодом;
 данные хранятся в схеме telegram существующей Neon/PostgreSQL.

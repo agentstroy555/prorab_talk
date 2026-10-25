@@ -101,3 +101,28 @@ test('public users cannot read, export, reply to or mutate another users estimat
   const foreignResponses=f.s.q('SELECT payload FROM outbox').map(e=>JSON.parse(e.payload)).filter(p=>p.chat_id===987654321);
   assert.ok(foreignResponses.length>0);assert.ok(foreignResponses.every(p=>!JSON.stringify(p).includes('секретный')));
 });
+
+
+test('equal package weight and bag count preserve the catalog variant in voice cards and export',async t=>{
+  const f=fixture(t,{stt:async()=>'Штукатурка Ротбанд 30 кг 30 мешков.'});
+  await f.put({text:'/new Equality regression'});await f.put(voice);
+  const line=f.s.lines(1)[0],p=JSON.parse(line.parsed);
+  assert.equal(p.variant.id,'0998');assert.equal(p.variant.label,'30 кг');
+  assert.equal(p.quantity,30);assert.equal(p.unit,'мешок');
+  const card=JSON.parse(f.s.one('SELECT payload FROM outbox WHERE line_id=? ORDER BY id DESC',line.id).payload);
+  assert.match(card.text,/Вариант: 30 кг/);assert.doesNotMatch(card.text,/вариант не выбран/);
+  await f.put({text:'/finish'});
+  const files=f.s.q("SELECT payload FROM outbox WHERE method='sendDocument'").map(r=>JSON.parse(r.payload)._document);
+  const item=JSON.parse(files.find(x=>x.mime==='application/json').content).items[0];
+  assert.equal(item.skuId,'0998');assert.equal(item.variant,'30 кг');assert.equal(item.quantity,30);
+});
+
+test('order counts do not invalidate a matching physical variant, while incompatible units remain blocked',()=>{
+  for(const n of [1,12,30,50]){
+    const p=parse(`Штукатурка Ротбанд 30 кг ${n} мешков.`);
+    assert.equal(p.variant?.label,'30 кг');assert.equal(p.quantity,n);assert.equal(p.unit,'мешок');
+  }
+  assert.equal(parse('грунтовка 10 литров 10 канистр').variant,null);
+  assert.equal(parse('Штукатурка Ротбанд 25 кг 30 мешков.').variant,null);
+  assert.equal(parse('ротбанд 30').variant,null);
+});
