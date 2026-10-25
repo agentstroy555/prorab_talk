@@ -1,8 +1,10 @@
-# Один Render-сервис: web + Telegram, v0.3.3 build 11
+# Один Render-сервис: web + Telegram, v0.3.4 build 12
 
-Тот же репозиторий `agentstroy555/prorab_talk`, тот же Render Web Service, тот же URL, одна команда `npm start`, один Node.js процесс, один HTTP listener на `PORT`. Telegram включается через `TELEGRAM_ENABLED=true`. При false (default) работает только прежний web; токен/allowlist/диск не требуются.
+Тот же репозиторий `agentstroy555/prorab_talk`, тот же Render Web Service, тот же URL, одна команда `npm start`, один Node.js процесс, один HTTP listener на `PORT`. Telegram включается через `TELEGRAM_ENABLED=true`. При false (default) работает только прежний web; токен/диск не требуются.
 
 Web UX и его VAD остаются прежними; изменены только metadata версии и запуск сервера. Telegram использует общий каталог/parser/matcher, но собственную консервативную обёртку и splitter. Один voice может создавать несколько строк за один STT-запрос. Web-заявки остаются в существующем PostgreSQL, Telegram-черновики/очередь/ledger — в SQLite. Это общий хостинг, а не синхронизация смет между каналами.
+
+Доступ открыт любому человеку в личном чате. Настройка пользовательских ID не нужна; Telegram передаёт ID автоматически для разделения смет. Устаревшая переменная ALLOWED_USER_IDS игнорируется, её можно удалить.
 
 ## Настройки существующего сервиса
 
@@ -18,12 +20,11 @@ Web UX и его VAD остаются прежними; изменены тол�
 NODE_VERSION=24.22.1
 TELEGRAM_ENABLED=true
 TELEGRAM_BOT_TOKEN=ТОКЕН_ИЗ_ПРИВАТНОГО_ФАЙЛА
-ALLOWED_USER_IDS=ЧИСЛОВОЙ_TELEGRAM_USER_ID
 BOT_MODE=polling
 DB_PATH=/var/data/agent-stroy.sqlite
 ```
 
-`PORT` задаёт Render; не переопределять. `GROQ_API_KEY` и `DATABASE_URL` уже должны быть заполнены у web. Пустой токен/allowlist/key при включённом боте закрывает запуск. `DB_PATH` должен быть абсолютным, на подключённом постоянном диске; абсолютный путь сам по себе не создаёт Render Disk.
+`PORT` задаёт Render; не переопределять. `GROQ_API_KEY` и `DATABASE_URL` уже должны быть заполнены у web. Пустой токен/key при включённом боте закрывает запуск. `DB_PATH` должен быть абсолютным, на подключённом постоянном диске; абсолютный путь сам по себе не создаёт Render Disk.
 
 Токен сохранён владельцем на приватном Google Drive; в публичный GitHub его не помещаем. Старый приватный build 10 с встроенным токеном остаётся архивом, не источником для public push. Не запускать второй bot polling process/отдельный Telegram `npm start` рядом с общим сервисом.
 
@@ -35,9 +36,9 @@ Webhook поддерживается на том же URL: `https://ВАШ_СУ�
 
 ## Проверка после деплоя
 
-- `/` открывает существующий интерфейс; version badge v0.3.3 (build 11).
+- `/` открывает существующий интерфейс; version badge v0.3.4 (build 12).
 - `/api/health` → 200, ok=true, telegram.enabled=true, telegram.ready=true.
-- В логах `service.ready` с version 0.3.3, build 11, web=true и telegram=polling/webhook.
+- В логах `service.ready` с version 0.3.4, build 12, web=true и telegram=polling/webhook.
 - `/start` → `/new Тест` → текстовый список → один voice с несколькими позициями → reply-уточнение → `/finish` → CSV/JSON.
 - Перезапустить сервис: `/history` сохраняется, web API сохранения работает. Проверить реальный счётчик Groq.
 

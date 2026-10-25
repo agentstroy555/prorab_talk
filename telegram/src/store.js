@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { privateUserContext } from './updates.js';
 
 export class Store {
   constructor(path = ':memory:', { recover = true } = {}) {
@@ -46,15 +47,12 @@ export class Store {
   active(user, chat) { return this.one("SELECT * FROM drafts WHERE user_id=? AND chat_id=? AND status='draft'", String(user), String(chat)); }
   lines(draftId) { return this.q("SELECT * FROM lines WHERE draft_id=? AND status!='deleted' ORDER BY position,id", draftId); }
   line(draftId, id) { return this.one("SELECT * FROM lines WHERE draft_id=? AND id=? AND status!='deleted'", draftId, id); }
-  enqueue(updates, maxPending, allowed) {
+  enqueue(updates, maxPending) {
     return this.tx(() => {
       let pending = this.one("SELECT count(*) AS n FROM inbox WHERE status!='done'").n + this.one("SELECT count(*) AS n FROM outbox WHERE status IN ('pending','sending')").n;
       for (const update of updates) {
         if (!Number.isSafeInteger(update?.update_id) || update.update_id < 0) throw new Error('Invalid update');
-        const m = update.message || update.callback_query?.message;
-        const user = update.message?.from || update.callback_query?.from;
-        // Private employee conversation only; groups and other update kinds never reach processing.
-        if (m?.chat?.type !== 'private' || !user || user.is_bot || !allowed.has(String(user.id))) continue;
+        if (!privateUserContext(update)) continue;
         if (this.one('SELECT 1 FROM inbox WHERE id=?', update.update_id)) continue;
         if (pending >= maxPending) throw new Error('Inbox full');
         this.run('INSERT INTO inbox(id,payload) VALUES(?,?)', update.update_id, JSON.stringify(update)); pending++;

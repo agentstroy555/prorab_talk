@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { privateUserContext } from './updates.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 export function claimLease(s,owner,now=Date.now()){
@@ -36,7 +37,7 @@ export function makeServer(engine,c,{ready=()=>true,requestHandler}={}){
       for await(const chunk of req){size+=chunk.length;if(size>256000){reply(413,{ok:false});return;}chunks.push(chunk);}
       const update=JSON.parse(Buffer.concat(chunks).toString());
       engine.enqueue([update]);reply(200,{ok:true});
-      if(update.callback_query&&engine.c.allowed.has(String(update.callback_query.from?.id)))void engine.telegram?.call?.('answerCallbackQuery',{callback_query_id:update.callback_query.id},3000).catch(()=>{});
+      if(update.callback_query&&privateUserContext(update))void engine.telegram?.call?.('answerCallbackQuery',{callback_query_id:update.callback_query.id},3000).catch(()=>{});
     }catch(error){reply(error.message==='Inbox full'?503:400,{ok:false});}
   });
 }
@@ -62,7 +63,7 @@ export async function runService(engine,telegram,c,{onReady=()=>{},onStopping=()
         const updates=await telegram.call('getUpdates',{offset:Number(s.get('offset','0')),limit:Math.min(100,c.maxPending-n),timeout:25,allowed_updates:['message','callback_query']},35000);
         if(!Array.isArray(updates))throw new Error('Bad updates');
         engine.enqueue(updates.sort((a,b)=>a.update_id-b.update_id));
-        for(const u of updates){if(u.callback_query)void telegram.call('answerCallbackQuery',{callback_query_id:u.callback_query.id},3000).catch(()=>{});}
+        for(const u of updates){if(u.callback_query&&privateUserContext(u))void telegram.call('answerCallbackQuery',{callback_query_id:u.callback_query.id},3000).catch(()=>{});}
       }catch(e){if(stopping)break;console.error(JSON.stringify({event:'poll.failed',status:e.status||0}));await sleep(Math.max(2,Math.min(60,e.retryAfter||3))*1000);}
     }
   })();

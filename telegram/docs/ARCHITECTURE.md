@@ -2,7 +2,7 @@
 
 ## Поток данных
 
-Telegram update → проверка private chat/allowlist → durable inbox (SQLite, unique update_id) → один последовательный worker → voice job/скачивание OGG → кэш/бюджет → Groq → parser/matcher → transaction строки и outbox → Telegram card.
+Telegram update → проверка private chat и Telegram identity → durable inbox (SQLite, unique update_id) → один последовательный worker → voice job/скачивание OGG → кэш/бюджет → Groq → parser/matcher → transaction строки и outbox → Telegram card.
 
 Текстовые команды не требуют STT. Исходная запись скачивается в ограниченный по размеру буфер и после обработки не сохраняется на диск; остаются Telegram file_id, текст и структурированные поля. Для уточнения reply_to_message сопоставляется с доставленной карточкой из outbox. Нельзя уточнять строку другого сотрудника/сметы.
 
@@ -49,3 +49,7 @@ STT timeout — 45 секунд. Есть общий cooldown по 429. Не в�
 `Engine.addParts` в одной транзакции создаёт все строки, source_parts и ответы. При recovery/retry не создаются дубликаты; полный transcript хранится отдельно. source_update остаётся уникальным у первой строки, source_parts связывает сообщение с первой и остальными. `/split` сохраняет ID первой строки и вставляет новые перед следующими строками. Это не меняет смысл `/clarify`/reply: уточнение относится к одной карточке.
 
 Паузы без данных о времени в STT json не анализируются. Алгоритм локальный и эвристический; не заявлять универсальную точность сегментации либо измеренное качество на реальном аудио.
+
+## Публичный доступ с build 12
+
+Оператор не задаёт список пользователей. Любой человек начинает личный чат и создаёт свою смету. privateUserContext проверяет корректность Telegram identity и соответствие private chat; группы и аккаунты ботов не обрабатываются. ID используется автоматически в запросах по владельцу сметы, не для допуска. Все history/export/commands/reply/callback остаются scoped по user+chat/draft. Существующие глобальные STT лимиты сохраняются.

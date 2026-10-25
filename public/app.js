@@ -1,6 +1,6 @@
 import { likelyWhisperHallucination, createVadEvidence, recordVadFrame, admitAutomaticSegment } from "./voice-utils.js";
-const APP_VERSION="0.3.3";
-const APP_BUILD=11;
+const APP_VERSION="0.3.4";
+const APP_BUILD=12;
 const $=s=>document.querySelector(s);
 const MIC_ICON='<svg class="mic-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="10.5" rx="3" fill="currentColor"></rect><path d="M6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v4M9.5 21h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg>';
 const rowsEl=$("#rows"),emptyState=$("#emptyState"),addManualButton=$("#addManualButton"),saveButton=$("#saveButton"),saveState=$("#saveState");
@@ -97,7 +97,7 @@ function installRuntimeUi(){
     logDownloadButton.onclick=()=>{haptic("tap");downloadLogs()};
   }
   const style=document.createElement("style");
-  style.dataset.runtimePatch="v0.3.3-build11";
+  style.dataset.runtimePatch="v0.3.4-build12";
   style.textContent=`
     .brand strong::after{display:none!important;content:none!important}
     .runtime-brand-title{display:flex;align-items:baseline;gap:7px;min-width:0}

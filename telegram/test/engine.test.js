@@ -5,7 +5,7 @@ import { Engine } from '../src/engine.js';
 import { config } from '../src/config.js';
 import { catalog, parse } from '../src/catalog.js';
 function fixture(t,{stt,download}={}){
-  const s=new Store();t.after(()=>s.close());const c=config({ALLOWED_USER_IDS:'1,2'},{requireSecrets:false});let calls=0,downloads=0;
+  const s=new Store();t.after(()=>s.close());const c=config({},{requireSecrets:false});let calls=0,downloads=0;
   const e=new Engine(s,c,{telegram:{download:async(...args)=>{downloads++;return download?download(...args):Buffer.from('OggSfixture');}},transcriber:{transcribe:async(...args)=>{calls++;return stt?stt(...args):'ротбанд 30 кг 12 мешков';}}});
   let id=0;
   const put=async(content,user=1)=>{const u={update_id:++id,message:{message_id:id,from:{id:user},chat:{id:user,type:'private'},...content}};e.enqueue([u]);await e.step();return u;};
@@ -26,8 +26,16 @@ test('duplicate updates cannot create another line or STT call',async t=>{
 test('two employees have isolated drafts and cannot edit each others line',async t=>{
   const f=fixture(t);await f.put({text:'/new'},1);await f.put({text:'цемент 20 мешков'},1);await f.put({text:'/new'},2);await f.put({text:'/edit 1 украдено'},2);assert.equal(f.s.lines(1)[0].raw_text,'цемент 20 мешков');assert.equal(f.s.lines(2).length,0);
 });
-test('unauthorized and group updates are not persisted or processed',async t=>{
-  const f=fixture(t);await f.put({text:'/new'},99);f.e.enqueue([{update_id:100,message:{from:{id:1},chat:{id:-1,type:'group'},...voice}}]);assert.equal(f.s.q('SELECT * FROM inbox').length,0);assert.equal(f.calls,0);
+test('new users can start and submit voice without registration or an allowlist',async t=>{
+  const f=fixture(t);await f.put({text:'/start'},987654321);await f.put({text:'/new'},987654321);await f.put(voice,987654321);
+  assert.ok(f.s.active(987654321,987654321));assert.equal(f.s.lines(1).length,1);assert.equal(f.calls,1);
+  assert.match(JSON.parse(f.s.q('SELECT payload FROM outbox ORDER BY id LIMIT 1')[0].payload).text,/Agent Stroy/);
+});
+test('groups and bot accounts are not persisted and spend no STT',async t=>{
+  const f=fixture(t);f.e.enqueue([
+    {update_id:100,message:{from:{id:99},chat:{id:-1,type:'group'},...voice}},
+    {update_id:101,message:{from:{id:99,is_bot:true},chat:{id:99,type:'private'},...voice}}
+  ]);assert.equal(f.s.q('SELECT * FROM inbox').length,0);assert.equal(await f.e.step(),false);assert.equal(f.calls,0);
 });
 test('voice before new draft, oversize, long duration spend no STT',async t=>{
   const f=fixture(t);await f.put(voice);await f.put({text:'/new'});await f.put({voice:{...voice.voice,duration:121}});await f.put({voice:{...voice.voice,file_size:20_000_000}});assert.equal(f.calls,0);assert.equal(f.downloads,0);
@@ -79,4 +87,17 @@ test('positive numeric quantity is required and custom unit is preserved',async 
 });
 test('explicit retry has a fixed attempt limit and does not create new rows',async t=>{
   const f=fixture(t,{stt:async()=>{throw new Error('failed');}});await f.put({text:'/new'});await f.put(voice);for(let i=0;i<4;i++)await f.put({text:'/retry 1'});assert.equal(f.calls,4);assert.equal(f.s.lines(1).length,1);assert.equal(f.s.one('SELECT attempt FROM voice_jobs').attempt,3);
+});
+
+test('public users cannot read, export, reply to or mutate another users estimate',async t=>{
+  const f=fixture(t);await f.put({text:'/new Private project'},1);await f.put({text:'секретный материал 12 штук'},1);
+  f.s.run('UPDATE outbox SET message_id=123 WHERE line_id=1');
+  await f.put({text:'/new Own project'},987654321);await f.put({text:'свой товар 3 штуки'},987654321);
+  for(const text of ['/show 1','/history','/list','/export','/row 1','/qty 1 999 кг','/delete 1','/restore 1','/merge 1 2','/edit 1 украдено'])await f.put({text},987654321);
+  await f.put({text:'чужое уточнение',reply_to_message:{message_id:123}},987654321);
+  f.e.enqueue([{update_id:100,callback_query:{id:'other-row',from:{id:987654321},message:{chat:{id:987654321,type:'private'}},data:'r:1:1:delete'}}]);await f.e.step();
+  assert.equal(f.s.lines(1)[0].raw_text,'секретный материал 12 штук');
+  assert.equal(f.s.lines(1)[0].status,'ready');assert.equal(f.s.lines(2).length,1);
+  const foreignResponses=f.s.q('SELECT payload FROM outbox').map(e=>JSON.parse(e.payload)).filter(p=>p.chat_id===987654321);
+  assert.ok(foreignResponses.length>0);assert.ok(foreignResponses.every(p=>!JSON.stringify(p).includes('секретный')));
 });

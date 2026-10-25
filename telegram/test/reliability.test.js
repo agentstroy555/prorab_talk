@@ -8,19 +8,19 @@ import { Engine } from '../src/engine.js';
 import { Telegram, Transcriber, RemoteError, limitedBody } from '../src/clients.js';
 import { deliverOne, claimLease, makeServer, runService } from '../src/runtime.js';
 import { exportDraft } from '../src/export.js';
-const c=()=>config({ALLOWED_USER_IDS:'1'},{requireSecrets:false});
+const c=()=>config({},{requireSecrets:false});
 const update=(id,text='/new')=>({update_id:id,message:{message_id:id,from:{id:1},chat:{id:1,type:'private'},text}});
 function store(t){const s=new Store();t.after(()=>s.close());return s;}
 function path(t){const dir=mkdtempSync(resolve('test/.tmp-'));t.after(()=>rmSync(dir,{force:true,recursive:true}));return dir+'/data.sqlite';}
-test('configuration is fail closed without secrets/user allowlist; invalid bounds fail fast',()=>{
-  assert.throws(()=>config({}));assert.throws(()=>config({STT_REQUESTS_PER_MINUTE:'0'},{requireSecrets:false}));assert.throws(()=>config({ALLOWED_USER_IDS:'*'},{requireSecrets:false}));
+test('configuration requires API secrets and validates numeric bounds',()=>{
+  assert.throws(()=>config({}));assert.throws(()=>config({STT_REQUESTS_PER_MINUTE:'0'},{requireSecrets:false}));
 });
 test('inbox and draft survive restart; done updates remain deduplicated',async t=>{
   const file=path(t);let s=new Store(file);let e=new Engine(s,c());e.enqueue([update(1),update(2,'цемент 12 мешков')]);await e.step();s.close();
   s=new Store(file);t.after(()=>s.close());e=new Engine(s,c());await e.step();assert.equal(s.lines(1)[0].raw_text,'цемент 12 мешков');e.enqueue([update(2,'OTHER')]);assert.equal(await e.step(),false);assert.equal(s.lines(1).length,1);
 });
 test('inbox overflow rolls back entire batch and offset',t=>{
-  const s=store(t);assert.throws(()=>s.enqueue([update(1),update(2)],1,new Set(['1'])));assert.equal(s.q('SELECT * FROM inbox').length,0);assert.equal(s.get('offset','0'),'0');
+  const s=store(t);assert.throws(()=>s.enqueue([update(1),update(2)],1));assert.equal(s.q('SELECT * FROM inbox').length,0);assert.equal(s.get('offset','0'),'0');
 });
 test('STT budget reservations persist, include failures and block ambiguous same attempt',t=>{
   const s=store(t),cfg={...c(),rpm:1};s.reserve('a',3,cfg,100000);assert.throws(()=>s.reserve('a',3,cfg,100001),/uncertain/);assert.throws(()=>s.reserve('b',3,cfg,100001),/budget/);s.reserve('b',3,cfg,161000);assert.equal(s.q('SELECT * FROM stt_attempts').length,2);
@@ -96,7 +96,7 @@ test('download preflight blocks oversized file and unsafe file paths before fetc
 });
 test('outbox backlog applies ingress backpressure instead of growing indefinitely',t=>{
   const s=store(t);s.tx(()=>s.emit(10,[{payload:{chat_id:1,text:'a'}},{payload:{chat_id:1,text:'b'}}]));
-  assert.throws(()=>s.enqueue([update(1)],2,new Set(['1'])),/Inbox full/);assert.equal(s.q('SELECT * FROM inbox').length,0);
+  assert.throws(()=>s.enqueue([update(1)],2),/Inbox full/);assert.equal(s.q('SELECT * FROM inbox').length,0);
 });
 test('interrupted explicit retry resumes same attempt key, rather than authorizing another STT',async t=>{
   const file=path(t);let s=new Store(file),e=new Engine(s,c());e.enqueue([update(1)]);await e.step();
@@ -115,8 +115,20 @@ test('schema v1 upgrade preserves existing rows and backfills message provenance
   s=new Store(file);assert.equal(s.get('schema_version'),'2');assert.equal(s.lines(1)[0].raw_text,'цемент 10 мешков');assert.equal(s.one('SELECT line_id FROM source_parts WHERE update_id=77').line_id,1);s.close();
 });
 test('public source requires a token from environment and never includes a default credential',()=>{
-  const base={GROQ_API_KEY:'mock-key',ALLOWED_USER_IDS:'1'};
+  const base={GROQ_API_KEY:'mock-key'};
   assert.throws(()=>config(base));
   const replacement='123456:TEST_OVERRIDE_FOR_LOCAL_TEST_ONLY';
   assert.equal(config({...base,TELEGRAM_BOT_TOKEN:replacement}).token,replacement);
+});
+
+test('public config starts with API credentials only and ignores obsolete allowlist settings',()=>{
+  const env={TELEGRAM_BOT_TOKEN:'123456:FAKE_TOKEN_FOR_LOCAL_TESTS_ONLY',GROQ_API_KEY:'mock'};
+  assert.equal(config(env).mode,'polling');
+  assert.equal(config({...env,ALLOWED_USER_IDS:'1'}).allowed,undefined);
+});
+test('public ingress accepts any valid private user but rejects missing, invalid or mismatched identities',t=>{
+  const s=store(t);
+  const privateUpdate=(id,user,chat=user)=>({update_id:id,message:{from:{id:user},chat:{id:chat,type:'private'},text:'/new'}});
+  s.enqueue([privateUpdate(1,987654321),privateUpdate(2,123456789),privateUpdate(3,0),privateUpdate(4,undefined),privateUpdate(5,99,98),privateUpdate(6,'99')],10);
+  assert.deepEqual(s.q('SELECT id FROM inbox ORDER BY id').map(x=>x.id),[1,2]);
 });

@@ -1,7 +1,7 @@
 import { Store } from '../src/store.js';
 import { config } from '../src/config.js';
 import { Engine } from '../src/engine.js';
-const s=new Store(),c=config({ALLOWED_USER_IDS:'1'},{requireSecrets:false});
+const s=new Store(),c=config({},{requireSecrets:false});
 const engine=new Engine(s,c,{telegram:{download:async()=>Buffer.from('OggS-demo')},transcriber:{transcribe:async()=>'ротбанд 30 кг 12 мешков'}});
 let id=0;
 for(const content of [{text:'/new Объект Север'},{voice:{file_id:'fixture',duration:4}},{text:'/qty 1 15 мешок'},{text:'/finish'}]){

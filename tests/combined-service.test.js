@@ -10,7 +10,7 @@ import {Store} from '../telegram/src/store.js';
 function database(){return {closed:false,healthy:true,async initDb(c){assert.equal(c.length,1000);},async healthcheck(){if(!this.healthy)throw new Error('db unavailable');},async savePurchaseRequest(items){return {id:7,items};},async closeDb(){this.closed=true;}};}
 async function start(t,{enabled=false,mode='webhook',telegram,db=database(),transcriber}={}){
   const dir=mkdtempSync(path.join(tmpdir(),'combined-'));
-  const env={PORT:'0',TELEGRAM_ENABLED:String(enabled),TELEGRAM_BOT_TOKEN:'123456:FAKE_TOKEN_FOR_LOCAL_TESTS_ONLY',GROQ_API_KEY:'mock',ALLOWED_USER_IDS:'1',BOT_MODE:mode,WEBHOOK_SECRET:'x'.repeat(24),DB_PATH:path.join(dir,'bot.sqlite')};
+  const env={PORT:'0',TELEGRAM_ENABLED:String(enabled),TELEGRAM_BOT_TOKEN:'123456:FAKE_TOKEN_FOR_LOCAL_TESTS_ONLY',GROQ_API_KEY:'mock',BOT_MODE:mode,WEBHOOK_SECRET:'x'.repeat(24),DB_PATH:path.join(dir,'bot.sqlite')};
   const api=telegram||{call:async method=>method==='getWebhookInfo'?{url:''}:{message_id:100}};
   let running,controls;
   const started=new Promise((resolve,reject)=>{running=startCombined({env,db,telegram:api,transcriber,onReady:c=>{controls=c;resolve(c);}});running.catch(reject);});
@@ -20,11 +20,11 @@ async function start(t,{enabled=false,mode='webhook',telegram,db=database(),tran
 }
 async function until(check){const deadline=Date.now()+3000;while(!check()){if(Date.now()>deadline)throw new Error('worker did not finish');await new Promise(r=>setTimeout(r,10));}}
 
-test('combined config is opt-in, validates allowlist/secrets, requires absolute storage before bot startup',()=>{
+test('combined config is opt-in, validates secrets, requires absolute storage before bot startup',()=>{
   assert.equal(serviceConfig({}).telegram,null);
   assert.throws(()=>serviceConfig({TELEGRAM_ENABLED:'yes'}));
   assert.throws(()=>serviceConfig({TELEGRAM_ENABLED:'true'}));
-  const base={TELEGRAM_ENABLED:'true',TELEGRAM_BOT_TOKEN:'123456:FAKE_TOKEN_FOR_LOCAL_TESTS_ONLY',GROQ_API_KEY:'mock',ALLOWED_USER_IDS:'1'};
+  const base={TELEGRAM_ENABLED:'true',TELEGRAM_BOT_TOKEN:'123456:FAKE_TOKEN_FOR_LOCAL_TESTS_ONLY',GROQ_API_KEY:'mock'};
   assert.throws(()=>serviceConfig(base),/absolute DB_PATH/);
   assert.throws(()=>serviceConfig({...base,DB_PATH:'./var/test.sqlite'}),/absolute DB_PATH/);
 });
@@ -39,17 +39,19 @@ test('existing web runs without bot credentials, serves UI/catalog/match/request
   assert.equal(existsSync(s.env.DB_PATH),false);
 });
 test('one listener serves web and authenticated webhook; voice splits locally; health includes both stores',async t=>{
-  let stt=0;const tg={call:async method=>method==='getWebhookInfo'?{url:'https://example.test/telegram/webhook'}:{message_id:101},download:async()=>Buffer.from('OggS-mock')};
+  let stt=0;const methods=[];const tg={call:async method=>{methods.push(method);return method==='getWebhookInfo'?{url:'https://example.test/telegram/webhook'}:{message_id:101};},download:async()=>Buffer.from('OggS-mock')};
   const s=await start(t,{enabled:true,telegram:tg,transcriber:{transcribe:async()=>{stt++;return 'цемент 12 мешков; кирпич 20 штук';}}});
   assert.equal((await fetch(s.url)).status,200);
   const post=async update=>fetch(s.url+'/telegram/webhook',{method:'POST',headers:{'content-type':'application/json','x-telegram-bot-api-secret-token':s.env.WEBHOOK_SECRET},body:JSON.stringify(update)});
   assert.equal((await fetch(s.url+'/telegram/webhook',{method:'POST',body:'{}'})).status,403);
-  const update=(id,content)=>({update_id:id,message:{message_id:id,from:{id:1},chat:{id:1,type:'private'},...content}});
+  const update=(id,content)=>({update_id:id,message:{message_id:id,from:{id:987654321},chat:{id:987654321,type:'private'},...content}});
   assert.equal((await post(update(1,{text:'/new Test'}))).status,200);
   await until(()=>s.engine.s.one('SELECT count(*) AS n FROM drafts').n===1);
   const voice=update(2,{voice:{file_id:'mock',duration:4}});
   assert.equal((await post(voice)).status,200);await until(()=>s.engine.s.lines(1).length===2);
   await post(voice);assert.equal(stt,1);
+  await post({update_id:3,callback_query:{id:'public-callback',from:{id:987654321},message:{message_id:101,chat:{id:987654321,type:'private'}},data:'r:1:1:family'}});
+  await until(()=>methods.includes('answerCallbackQuery'));
   const health=await (await fetch(s.url+'/api/health')).json();assert.deepEqual(health.telegram,{enabled:true,ready:true});
   assert.equal((await fetch(s.url+'/health')).status,200);
   assert.equal((await fetch(s.url+'/api/catalog?limit=3')).status,200);
@@ -69,7 +71,7 @@ test('polling mode reserves webhook route and keeps normal web routes available'
 test('startup rejects an active webhook in polling mode, closes PostgreSQL and never changes webhook',async()=>{
   const dir=mkdtempSync(path.join(tmpdir(),'combined-fail-')),db=database(),methods=[];
   try{
-    await assert.rejects(startCombined({env:{PORT:'0',TELEGRAM_ENABLED:'true',TELEGRAM_BOT_TOKEN:'123456:FAKE_TOKEN_FOR_LOCAL_TESTS_ONLY',GROQ_API_KEY:'mock',ALLOWED_USER_IDS:'1',DB_PATH:path.join(dir,'db.sqlite')},db,telegram:{call:async method=>{methods.push(method);return method==='getWebhookInfo'?{url:'https://example.test/active'}:{};}}}),/Webhook is active/);
+    await assert.rejects(startCombined({env:{PORT:'0',TELEGRAM_ENABLED:'true',TELEGRAM_BOT_TOKEN:'123456:FAKE_TOKEN_FOR_LOCAL_TESTS_ONLY',GROQ_API_KEY:'mock',DB_PATH:path.join(dir,'db.sqlite')},db,telegram:{call:async method=>{methods.push(method);return method==='getWebhookInfo'?{url:'https://example.test/active'}:{};}}}),/Webhook is active/);
     assert.deepEqual(methods,['getMe','getWebhookInfo']);assert.equal(db.closed,true);
   }finally{rmSync(dir,{recursive:true,force:true});}
 });
@@ -84,8 +86,8 @@ test('shutdown aborts Telegram transport and records uncertain Groq attempt with
 });
 test('release metadata is consistent for web, bot and visible version; catalog is shared',()=>{
   const read=p=>JSON.parse(readFileSync(new URL('../'+p,import.meta.url)));
-  for(const p of ['app-version.json','public/app-version.json','telegram/app-version.json']){assert.equal(read(p).version,'0.3.3');assert.equal(read(p).build,11);}
-  assert.equal(read('package.json').version,'0.3.3');assert.equal(read('telegram/package.json').version,'0.3.3');
+  for(const p of ['app-version.json','public/app-version.json','telegram/app-version.json']){assert.equal(read(p).version,'0.3.4');assert.equal(read(p).build,12);}
+  assert.equal(read('package.json').version,'0.3.4');assert.equal(read('telegram/package.json').version,'0.3.4');
   assert.equal(existsSync(new URL('../telegram/src/bot-token.js',import.meta.url)),false);
 });
 

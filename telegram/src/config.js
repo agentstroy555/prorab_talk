@@ -4,11 +4,9 @@ export function config(env = process.env, { requireSecrets = true } = {}) {
     if (!Number.isSafeInteger(value) || value < min || value > max) throw new Error(`Invalid configuration: ${name}`);
     return value;
   };
-  const allowed = (env.ALLOWED_USER_IDS || '').split(',').map(x => x.trim()).filter(Boolean);
-  if (allowed.some(x => !/^[1-9]\d{0,15}$/.test(x))) throw new Error('Invalid ALLOWED_USER_IDS');
   const c = {
     token: env.TELEGRAM_BOT_TOKEN || '', groqKey: env.GROQ_API_KEY || '',
-    allowed: new Set(allowed), mode: env.BOT_MODE || 'polling', secret: env.WEBHOOK_SECRET || '',
+    mode: env.BOT_MODE || 'polling', secret: env.WEBHOOK_SECRET || '',
     port: integer('PORT', 3000, 0, 65535), dbPath: env.DB_PATH || './var/agent-stroy.sqlite',
     maxVoiceSeconds: integer('MAX_VOICE_SECONDS', 120, 1, 1200),
     maxVoiceBytes: integer('MAX_VOICE_BYTES', 15000000, 1024, 20000000),
@@ -18,8 +16,8 @@ export function config(env = process.env, { requireSecrets = true } = {}) {
     requestTimeoutMs: 45000
   };
   if (!['polling', 'webhook'].includes(c.mode)) throw new Error('BOT_MODE must be polling or webhook');
-  if (requireSecrets && (!/^\d+:[A-Za-z0-9_-]{20,}$/.test(c.token) || !c.groqKey || !c.allowed.size)) {
-    throw new Error('Set TELEGRAM_BOT_TOKEN, GROQ_API_KEY and ALLOWED_USER_IDS in environment');
+  if (requireSecrets && (!/^\d+:[A-Za-z0-9_-]{20,}$/.test(c.token) || !c.groqKey)) {
+    throw new Error('Set TELEGRAM_BOT_TOKEN and GROQ_API_KEY in environment');
   }
   if (requireSecrets && c.mode === 'webhook' && !/^[A-Za-z0-9_-]{24,256}$/.test(c.secret)) throw new Error('Set a random WEBHOOK_SECRET (24–256 characters)');
   return c;

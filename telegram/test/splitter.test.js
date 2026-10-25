@@ -30,7 +30,7 @@ test('bounds reject whole message without truncating tail',()=>{
  assert.throws(()=>splitPositions('а'.repeat(2001)),/message_length/);
 });
 function fixture(t,transcript='цемент 20 мешков и песок 5 мешков'){
- const s=new Store();t.after(()=>s.close());let id=0,calls=0;const e=new Engine(s,config({ALLOWED_USER_IDS:'1'},{requireSecrets:false}),{telegram:{download:async()=>Buffer.from('OggS')},transcriber:{transcribe:async()=>{calls++;return typeof transcript==='function'?transcript(calls):transcript;}}});
+ const s=new Store();t.after(()=>s.close());let id=0,calls=0;const e=new Engine(s,config({},{requireSecrets:false}),{telegram:{download:async()=>Buffer.from('OggS')},transcriber:{transcribe:async()=>{calls++;return typeof transcript==='function'?transcript(calls):transcript;}}});
  const put=async(content)=>{const u={update_id:++id,message:{message_id:id,from:{id:1},chat:{id:1,type:'private'},...content}};e.enqueue([u]);await e.step();return u;};
  return {s,e,put,get calls(){return calls;}};
 }

@@ -11,7 +11,7 @@ const HELP=`Agent Stroy v${VERSION.version} (build ${VERSION.build})\n/new На�
 const JSONp=l=>JSON.parse(l.parsed);
 export class Engine {
   constructor(store,c,{telegram,transcriber}={}){this.s=store;this.c=c;this.telegram=telegram;this.transcriber=transcriber;}
-  enqueue(updates){this.s.enqueue(updates,this.c.maxPending,this.c.allowed);}
+  enqueue(updates){this.s.enqueue(updates,this.c.maxPending);}
   message(chat,text,extra={}){return {payload:{chat_id:chat,text,...extra}};}
   chunks(chat,text){
     const result=[];let chunk='';
