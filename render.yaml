@@ -3,11 +3,15 @@ services:
     name: prorab-talk
     runtime: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm ci
     startCommand: npm start
     healthCheckPath: /api/health
     autoDeployTrigger: commit
     envVars:
+      # Telegram is opt-in. Enabling it requires paid compute + persistent disk.
+      # Configure the existing service using docs/RENDER.md before setting true.
+      - key: NODE_VERSION
+        value: 24.22.1
       - key: NODE_ENV
         value: production
       - key: GROQ_API_KEY

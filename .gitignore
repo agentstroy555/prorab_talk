@@ -2,3 +2,11 @@
 node_modules/
 npm-debug.log*
 .DS_Store
+
+var/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.env.*
+!.env.example
+public/vendor/
