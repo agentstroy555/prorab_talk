@@ -86,8 +86,8 @@ test('shutdown aborts Telegram transport and records uncertain Groq attempt with
 });
 test('release metadata is consistent for web, bot and visible version; catalog is shared',()=>{
   const read=p=>JSON.parse(readFileSync(new URL('../'+p,import.meta.url)));
-  for(const p of ['app-version.json','public/app-version.json','telegram/app-version.json']){assert.equal(read(p).version,'0.3.6');assert.equal(read(p).build,14);}
-  assert.equal(read('package.json').version,'0.3.6');assert.equal(read('telegram/package.json').version,'0.3.6');
+  for(const p of ['app-version.json','public/app-version.json','telegram/app-version.json']){assert.equal(read(p).version,'0.3.7');assert.equal(read(p).build,15);}
+  assert.equal(read('package.json').version,'0.3.7');assert.equal(read('telegram/package.json').version,'0.3.7');
   assert.equal(existsSync(new URL('../telegram/src/bot-token.js',import.meta.url)),true);
 });
 

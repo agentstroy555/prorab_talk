@@ -1,4 +1,4 @@
-# Render Free + Neon: web и Telegram, v0.3.6 build 14
+# Render Free + Neon: web и Telegram, v0.3.7 build 15
 
 Один существующий Render Web Service, один HTTP-порт, одна команда `npm start`.
 Платный instance и persistent disk не требуются. `DATABASE_URL` указывает на уже
@@ -50,7 +50,7 @@ Webhook отвечает 200 только после фиксации update в 
 
 ## Проверка
 
-- В шапке сайта v0.3.6 (build 14).
+- В шапке сайта v0.3.7 (build 15).
 - /api/health: ok=true, telegram.enabled=true, telegram.ready=true.
 - Лог service.ready: telegram=webhook, storage=postgres.
 - /start, /new Тест, текст/voice-список, reply, /finish.

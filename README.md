@@ -1,4 +1,4 @@
-# Прораб Talk + Parabtalk — v0.3.6 (build 14)
+# Прораб Talk + Parabtalk — v0.3.7 (build 15)
 
 Мобильный voice-first прототип Agent Stroy для создания заявки на стройматериалы.
 
