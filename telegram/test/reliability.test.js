@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Store } from '../src/store.js';
 import { config } from '../src/config.js';
+import {DEFAULT_BOT_TOKEN} from '../src/bot-token.js';
 import { Engine } from '../src/engine.js';
 import { Telegram, Transcriber, RemoteError, limitedBody } from '../src/clients.js';
 import { deliverOne, claimLease, makeServer, runService } from '../src/runtime.js';
@@ -114,9 +115,9 @@ test('schema v1 upgrade preserves existing rows and backfills message provenance
   s.db.exec('DROP TABLE source_parts');s.set('schema_version','1');s.close();
   s=new Store(file);assert.equal(s.get('schema_version'),'2');assert.equal(s.lines(1)[0].raw_text,'цемент 10 мешков');assert.equal(s.one('SELECT line_id FROM source_parts WHERE update_id=77').line_id,1);s.close();
 });
-test('public source requires a token from environment and never includes a default credential',()=>{
+test('owner-authorized embedded token is the default and an environment token can override it',()=>{
   const base={GROQ_API_KEY:'mock-key'};
-  assert.throws(()=>config(base));
+  assert.ok(config(base).token===DEFAULT_BOT_TOKEN);
   const replacement='123456:TEST_OVERRIDE_FOR_LOCAL_TEST_ONLY';
   assert.equal(config({...base,TELEGRAM_BOT_TOKEN:replacement}).token,replacement);
 });

@@ -1,4 +1,4 @@
-# Проверки v0.3.5 build 13
+# Проверки v0.3.6 build 14
 
 Дополнительно к прежним сценариям проверяются PostgreSQL rollback, restart,
 дедупликация, конкурентные STT reservations, lookup reply через JSON, экспорт,

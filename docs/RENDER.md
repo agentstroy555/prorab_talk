@@ -1,4 +1,4 @@
-# Render Free + Neon: web и Telegram, v0.3.5 build 13
+# Render Free + Neon: web и Telegram, v0.3.6 build 14
 
 Один существующий Render Web Service, один HTTP-порт, одна команда `npm start`.
 Платный instance и persistent disk не требуются. `DATABASE_URL` указывает на уже
@@ -10,11 +10,12 @@
 - Node 24.x (закреплён в .node-version и package.json).
 - DATABASE_URL — строка Neon с pooling и параметрами TLS.
 - GROQ_API_KEY — существующий ключ распознавания.
-- TELEGRAM_BOT_TOKEN — токен бота в Environment.
+- Токен бота встроен по прямому указанию владельца; TELEGRAM_BOT_TOKEN — только необязательная замена.
 - Build: npm ci. Start: npm start. Health: /api/health.
 
-Если токен задан, бот включается автоматически. TELEGRAM_ENABLED=true больше
-не требуется; явное false остаётся способом отключить бота.
+На Render бот включается автоматически со встроенным токеном, даже при старом
+TELEGRAM_ENABLED=false. Добавлять Telegram-переменные вручную не требуется.
+Для локального web-only запуска TELEGRAM_ENABLED=false сохраняется.
 На Render код автоматически выбирает webhook, получает адрес сервиса из
 RENDER_EXTERNAL_URL и вызывает setWebhook с секретным заголовком, max_connections=1,
 allowed_updates=[message,callback_query], drop_pending_updates=false. Секрет
@@ -49,7 +50,7 @@ Webhook отвечает 200 только после фиксации update в 
 
 ## Проверка
 
-- В шапке сайта v0.3.5 (build 13).
+- В шапке сайта v0.3.6 (build 14).
 - /api/health: ok=true, telegram.enabled=true, telegram.ready=true.
 - Лог service.ready: telegram=webhook, storage=postgres.
 - /start, /new Тест, текст/voice-список, reply, /finish.
