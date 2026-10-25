@@ -1,4 +1,4 @@
-# Актуальная архитектура v0.3.5 build 13
+# Актуальная архитектура v0.3.6 build 14
 
 Production Render Free использует PostgresStore и схему telegram в Neon.
 Engine и STT/runtime ожидают асинхронные операции хранилища. SQLite остаётся

@@ -1,4 +1,4 @@
-# Прораб Talk + Parabtalk — v0.3.5 (build 13)
+# Прораб Talk + Parabtalk — v0.3.6 (build 14)
 
 Мобильный voice-first прототип Agent Stroy для создания заявки на стройматериалы.
 
@@ -36,9 +36,9 @@ npm run dev
 
 ## Render
 
-Для существующего Render service: [инструкция web + Telegram](docs/RENDER.md). Токен TELEGRAM_BOT_TOKEN автоматически включает бота. Без токена работает сайт; TELEGRAM_ENABLED=false явно отключает бота.
+Для существующего Render service: [инструкция web + Telegram](docs/RENDER.md). На Render бот включается автоматически с токеном, встроенным по прямому указанию владельца. Старый TELEGRAM_ENABLED=false на Render игнорируется. TELEGRAM_BOT_TOKEN можно задать как замену встроенного значения.
 
-`render.yaml` описывает бесплатный Web Service. DATABASE_URL указывает на настроенную Neon; GROQ_API_KEY и TELEGRAM_BOT_TOKEN задаются в Environment. База Render и persistent disk не требуются.
+`render.yaml` описывает бесплатный Web Service. DATABASE_URL указывает на настроенную Neon; GROQ_API_KEY задаётся в Environment; токен Telegram уже встроен и может быть заменён через TELEGRAM_BOT_TOKEN. База Render и persistent disk не требуются.
 
 <!-- repair staging write check -->
 
@@ -46,4 +46,4 @@ npm run dev
 
 `npm start` запускает один сервер для сайта и опционального бота. Каталог и parser общие; web-заявки остаются в PostgreSQL, Telegram-данные — отдельная схема telegram в той же PostgreSQL/Neon. Webhook регистрируется автоматически; входящее сообщение может разбудить Render Free после сна. Сметы между каналами автоматически не синхронизируются. Новых web UX функций этот релиз не добавляет.
 
-Проверки из корня: `npm run check`, `npm test`, `npm run demo:telegram`. Подробности бота: [telegram/README.md](telegram/README.md). Токен задаётся в Render Environment; в публичных исходниках секрета нет.
+Проверки из корня: `npm run check`, `npm test`, `npm run demo:telegram`. Подробности бота: [telegram/README.md](telegram/README.md). Токен встроен в исходники по прямому разрешению владельца; в Environment его задавать не требуется.

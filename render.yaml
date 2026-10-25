@@ -17,5 +17,3 @@ services:
       # Existing Neon URL; do not bind back to the abandoned Render database.
       - key: DATABASE_URL
         sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false

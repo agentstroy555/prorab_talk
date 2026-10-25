@@ -86,9 +86,9 @@ test('shutdown aborts Telegram transport and records uncertain Groq attempt with
 });
 test('release metadata is consistent for web, bot and visible version; catalog is shared',()=>{
   const read=p=>JSON.parse(readFileSync(new URL('../'+p,import.meta.url)));
-  for(const p of ['app-version.json','public/app-version.json','telegram/app-version.json']){assert.equal(read(p).version,'0.3.5');assert.equal(read(p).build,13);}
-  assert.equal(read('package.json').version,'0.3.5');assert.equal(read('telegram/package.json').version,'0.3.5');
-  assert.equal(existsSync(new URL('../telegram/src/bot-token.js',import.meta.url)),false);
+  for(const p of ['app-version.json','public/app-version.json','telegram/app-version.json']){assert.equal(read(p).version,'0.3.6');assert.equal(read(p).build,14);}
+  assert.equal(read('package.json').version,'0.3.6');assert.equal(read('telegram/package.json').version,'0.3.6');
+  assert.equal(existsSync(new URL('../telegram/src/bot-token.js',import.meta.url)),true);
 });
 
 test('production entrypoint exits cleanly on missing database config rather than deadlocking on circular imports',async()=>{
@@ -105,13 +105,13 @@ test('Render automatically uses PostgreSQL and webhook without a disk or an enab
   assert.equal(a.storage,'postgres');assert.equal(a.mode,'webhook');
   assert.equal(a.webhookUrl,'https://prorab-talk.onrender.com/telegram/webhook');
   assert.match(a.secret,/^[a-f0-9]{64}$/);assert.equal(a.secret,b.secret);
-  assert.equal(serviceConfig({...env,TELEGRAM_ENABLED:'false'}).telegram,null);
+  assert.equal(serviceConfig({...env,TELEGRAM_ENABLED:'false'}).telegram.mode,'webhook');
   assert.throws(()=>serviceConfig({...env,DATABASE_URL:''}),/DATABASE_URL/);
 });
 
-test('Render startup registers webhook automatically and keeps pending Telegram updates',async()=>{
+test('Render starts with the embedded token despite a legacy disable flag and preserves pending updates',async()=>{
   const db=database(),methods=[],s=new Store();let controls;
-  const env={PORT:'0',RENDER:'true',RENDER_EXTERNAL_URL:'https://example.onrender.com',DATABASE_URL:'postgresql://unused/mock',TELEGRAM_BOT_TOKEN:'123456:FAKE_TOKEN_FOR_LOCAL_TESTS_ONLY',GROQ_API_KEY:'mock'};
+  const env={PORT:'0',RENDER:'true',RENDER_EXTERNAL_URL:'https://example.onrender.com',DATABASE_URL:'postgresql://unused/mock',GROQ_API_KEY:'mock',TELEGRAM_ENABLED:'false'};
   const tg={call:async(method,payload)=>{methods.push({method,payload});return method==='getWebhookInfo'?{url:''}:true;}};
   await startCombined({env,db,telegram:tg,storeFactory:async()=>s,onReady:c=>{controls=c;c.stop();}});
   assert.ok(controls);assert.equal(db.closed,true);

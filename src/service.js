@@ -4,6 +4,7 @@ import {createHmac} from 'node:crypto';
 import * as database from './db.js';
 import {createApp,catalog} from '../server.js';
 import {config} from '../telegram/src/config.js';
+import {botToken} from '../telegram/src/bot-token.js';
 import {Store} from '../telegram/src/store.js';
 import {PostgresStore} from '../telegram/src/postgres-store.js';
 import {Telegram,Transcriber} from '../telegram/src/clients.js';
@@ -11,17 +12,19 @@ import {Engine,VERSION} from '../telegram/src/engine.js';
 import {runService} from '../telegram/src/runtime.js';
 
 export function serviceConfig(env=process.env){
+  const render=env.RENDER==='true';
+  const token=botToken(env);
   const flag=env.TELEGRAM_ENABLED;
   if(flag!==undefined&&!['true','false'].includes(flag))throw new Error('TELEGRAM_ENABLED must be true or false');
   const port=Number(env.PORT||3000);
   if(!Number.isSafeInteger(port)||port<0||port>65535)throw new Error('Invalid PORT');
-  const enabled=flag===undefined?!!env.TELEGRAM_BOT_TOKEN:flag==='true';
+  // Render is the owner's production bot: legacy opt-out flags must not leave it web-only.
+  const enabled=render||(flag===undefined?!!env.TELEGRAM_BOT_TOKEN:flag==='true');
   if(!enabled)return {port,telegram:null};
-  const render=env.RENDER==='true';
   const origin=env.RENDER_EXTERNAL_URL||env.BOT_PUBLIC_URL||'';
   const mode=render?'webhook':env.BOT_MODE||(origin?'webhook':'polling');
-  const secret=env.WEBHOOK_SECRET||createHmac('sha256',env.TELEGRAM_BOT_TOKEN||'').update('parabtalk-webhook-v1').digest('hex');
-  const telegram=config({...env,BOT_MODE:mode,WEBHOOK_SECRET:secret});
+  const secret=env.WEBHOOK_SECRET||createHmac('sha256',token).update('parabtalk-webhook-v1').digest('hex');
+  const telegram=config({...env,TELEGRAM_BOT_TOKEN:token,BOT_MODE:mode,WEBHOOK_SECRET:secret});
   telegram.storage=render||env.DATABASE_URL?'postgres':'sqlite';
   if(telegram.storage==='postgres'&&!env.DATABASE_URL)throw new Error('Set DATABASE_URL for Telegram PostgreSQL storage');
   if(telegram.storage==='sqlite'&&(!env.DB_PATH||!path.isAbsolute(env.DB_PATH)))throw new Error('Set an absolute DB_PATH for local SQLite storage, or use DATABASE_URL');
