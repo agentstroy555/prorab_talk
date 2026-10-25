@@ -1,3 +1,14 @@
+# Проверки v0.3.5 build 13
+
+Дополнительно к прежним сценариям проверяются PostgreSQL rollback, restart,
+дедупликация, конкурентные STT reservations, lookup reply через JSON, экспорт,
+автоматическая Render-конфигурация без диска, setWebhook без потери pending updates,
+ack только после durable enqueue и HTTP 503 при сбое базы.
+GitHub CI использует PostgreSQL 17. Реальные Telegram/Groq и Render sleep/wake
+требуют отдельного smoke; локальные mocks не доказывают production-запуск.
+
+## Прежние сценарии
+
 # Проверки v0.3.4 (build 12)
 
 Дата: 2026-10-25. Окружение: Linux, Node.js 24.22.1. Локальные автоматические проверки, **не live Telegram/Groq acceptance**.

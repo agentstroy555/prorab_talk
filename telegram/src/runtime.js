@@ -2,28 +2,26 @@ import http from 'node:http';
 import { privateUserContext } from './updates.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-export function claimLease(s,owner,now=Date.now()){
-  return s.tx(()=>{
-    const lease=JSON.parse(s.get('runtime_lease','null'));
+export async function claimLease(s,owner,now=Date.now()){
+  return s.tx(async()=>{
+    const lease=JSON.parse(await s.get('runtime_lease','null'));
     if(lease&&lease.owner!==owner&&lease.until>now)return false;
-    s.set('runtime_lease',JSON.stringify({owner,until:now+60000}));return true;
+    await s.set('runtime_lease',JSON.stringify({owner,until:now+60000}));return true;
   });
 }
 export async function deliverOne(s,telegram,now=Date.now()){
-  const e=s.one("SELECT * FROM outbox WHERE status='pending' AND next_at<=? ORDER BY id LIMIT 1",now);if(!e)return false;
-  s.run("UPDATE outbox SET status='sending',attempts=attempts+1 WHERE id=?",e.id);
+  const e=await s.claimOutbox(now);if(!e)return false;
   try{
     const result=await telegram.call(e.method,JSON.parse(e.payload));
-    s.run("UPDATE outbox SET status='delivered',message_id=? WHERE id=?",result?.message_id??null,e.id);
+    await s.run("UPDATE outbox SET status='delivered',message_id=? WHERE id=?",result?.message_id??null,e.id);
   }catch(error){
-    // A 429 is known not to have sent the message; an unknown network result is not safe to replay.
     const retry=error.status===429&&e.attempts<5;
-    s.run('UPDATE outbox SET status=?,next_at=? WHERE id=?',retry?'pending':error.status?'failed':'uncertain',now+Math.max(1,error.retryAfter||5)*1000,e.id);
+    await s.run('UPDATE outbox SET status=?,next_at=? WHERE id=?',retry?'pending':error.status?'failed':'uncertain',now+Math.max(1,error.retryAfter||5)*1000,e.id);
     console.error(JSON.stringify({event:'delivery.failed',outboxId:e.id,status:error.status||0,retry}));
   }
   return true;
 }
-export function makeServer(engine,c,{ready=()=>true,requestHandler}={}){
+export function makeServer(engine,c,{ready=()=>true,requestHandler,wake=()=>{}}={}){
   return http.createServer(async(req,res)=>{
     const reply=(status,data)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(data));};
     if(!requestHandler&&req.url==='/health'&&req.method==='GET'){reply(ready()?200:503,{ok:ready()});return;}
@@ -36,43 +34,63 @@ export function makeServer(engine,c,{ready=()=>true,requestHandler}={}){
       let size=0;const chunks=[];
       for await(const chunk of req){size+=chunk.length;if(size>256000){reply(413,{ok:false});return;}chunks.push(chunk);}
       const update=JSON.parse(Buffer.concat(chunks).toString());
-      engine.enqueue([update]);reply(200,{ok:true});
+      await engine.enqueue([update]);wake();reply(200,{ok:true});
       if(update.callback_query&&privateUserContext(update))void engine.telegram?.call?.('answerCallbackQuery',{callback_query_id:update.callback_query.id},3000).catch(()=>{});
-    }catch(error){reply(error.message==='Inbox full'?503:400,{ok:false});}
+    }catch(error){reply(error.message==='Inbox full'?503:error.message==='Invalid update'||error instanceof SyntaxError?400:503,{ok:false});}
   });
 }
 export async function runService(engine,telegram,c,{onReady=()=>{},onStopping=()=>{},requestHandler}={}){
   const s=engine.s,owner=randomUUID();
-  // Same-disk lease; run only one replica. A crashed instance's lease expires within 60 seconds.
-  const started=Date.now();
-  while(!claimLease(s,owner)){if(Date.now()-started>65000)throw new Error('Another service instance owns this database');await sleep(1000);}
-  s.db.exec("UPDATE inbox SET status='pending' WHERE status='processing';UPDATE outbox SET status='uncertain' WHERE status='sending';");
-  let stopping=false,leaseOk=true;
-  const server=makeServer(engine,c,{ready:()=>leaseOk&&!stopping,requestHandler});
+  let stopping=false,leader=false,checking=false,generation=0;
+  const waiters=new Set();
+  const wake=()=>{generation++;for(const resolve of [...waiters])resolve();};
+  const pause=(stamp,ms=30000)=>new Promise(resolve=>{
+    if(stopping||generation!==stamp){resolve();return;}
+    const done=()=>{clearTimeout(timer);waiters.delete(done);resolve();};
+    const timer=setTimeout(done,ms);waiters.add(done);
+  });
+  const stop=()=>{if(!stopping){stopping=true;onStopping();wake();}};
+  const ownership=async()=>{
+    if(checking||stopping)return;checking=true;
+    try{
+      const claimed=await claimLease(s,owner);
+      if(leader&&!claimed){leader=false;stop();return;}
+      if(!leader&&claimed){await s.recover();leader=true;wake();}
+    }finally{checking=false;}
+  };
+  const server=makeServer(engine,c,{ready:()=>!stopping,requestHandler,wake});
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(c.port,'0.0.0.0',resolve);});
-  const heartbeat=setInterval(()=>{try{leaseOk=claimLease(s,owner);if(!leaseOk)stopping=true;}catch{leaseOk=false;stopping=true;}},10000);
-  let outboundActive=false;
-  const outgoing=(async()=>{while(!stopping){outboundActive=await deliverOne(s,telegram);await sleep(outboundActive?1100:150);}})();
-  const worker=(async()=>{while(!stopping){if(!await engine.step())await sleep(100);}})();
-  const poller=(async()=>{
-    if(c.mode!=='polling')return;
-    while(!stopping){
-      try{
-        const n=s.one("SELECT count(*) AS n FROM inbox WHERE status!='done'").n+s.one("SELECT count(*) AS n FROM outbox WHERE status IN ('pending','sending')").n;
-        if(n>=c.maxPending){await sleep(1000);continue;}
-        const updates=await telegram.call('getUpdates',{offset:Number(s.get('offset','0')),limit:Math.min(100,c.maxPending-n),timeout:25,allowed_updates:['message','callback_query']},35000);
-        if(!Array.isArray(updates))throw new Error('Bad updates');
-        engine.enqueue(updates.sort((a,b)=>a.update_id-b.update_id));
-        for(const u of updates){if(u.callback_query&&privateUserContext(u))void telegram.call('answerCallbackQuery',{callback_query_id:u.callback_query.id},3000).catch(()=>{});}
-      }catch(e){if(stopping)break;console.error(JSON.stringify({event:'poll.failed',status:e.status||0}));await sleep(Math.max(2,Math.min(60,e.retryAfter||3))*1000);}
-    }
-  })();
-  const stop=()=>{stopping=true;onStopping();};process.once('SIGTERM',stop);process.once('SIGINT',stop);
-  try{onReady({server,stop,isReady:()=>leaseOk&&!stopping});await Promise.all([worker,poller,outgoing]);}
-  finally{
-    stopping=true;onStopping();clearInterval(heartbeat);
-    await Promise.allSettled([worker,poller,outgoing]);process.off('SIGTERM',stop);process.off('SIGINT',stop);
+  let heartbeat,worker,poller,outgoing;
+  process.once('SIGTERM',stop);process.once('SIGINT',stop);
+  try{
+    await ownership();
+    heartbeat=setInterval(()=>{void ownership().catch(()=>{leader=false;stop();});},10000);
+    outgoing=(async()=>{while(!stopping){const stamp=generation;if(!leader){await pause(stamp);continue;}if(await deliverOne(s,telegram))await sleep(1100);else await pause(stamp,5000);}})();
+    worker=(async()=>{while(!stopping){const stamp=generation;if(!leader){await pause(stamp);continue;}if(await engine.step())wake();else await pause(stamp,5000);}})();
+    poller=(async()=>{
+      if(c.mode!=='polling')return;
+      while(!stopping){
+        try{
+          if(!leader){await pause(generation);continue;}
+          const n=(await s.one("SELECT count(*) AS n FROM inbox WHERE status!='done'")).n+(await s.one("SELECT count(*) AS n FROM outbox WHERE status IN ('pending','sending')")).n;
+          if(n>=c.maxPending){await sleep(1000);continue;}
+          const updates=await telegram.call('getUpdates',{offset:Number(await s.get('offset','0')),limit:Math.min(100,c.maxPending-n),timeout:25,allowed_updates:['message','callback_query']},35000);
+          if(!Array.isArray(updates))throw new Error('Bad updates');
+          await engine.enqueue(updates.sort((a,b)=>a.update_id-b.update_id));wake();
+          for(const u of updates){if(u.callback_query&&privateUserContext(u))void telegram.call('answerCallbackQuery',{callback_query_id:u.callback_query.id},3000).catch(()=>{});}
+        }catch(e){if(stopping)break;console.error(JSON.stringify({event:'poll.failed',status:e.status||0}));await sleep(Math.max(2,Math.min(60,e.retryAfter||3))*1000);}
+      }
+    })();
+    // During rolling deploy a standby can durably accept webhook updates while the
+    // old instance drains. The leader processes the shared queue until handover.
+    await onReady({server,stop,isReady:()=>!stopping});
+    await Promise.all([worker,poller,outgoing]);
+  }finally{
+    stop();clearInterval(heartbeat);
+    await Promise.allSettled([worker,poller,outgoing].filter(Boolean));
+    while(checking)await sleep(10);
+    process.off('SIGTERM',stop);process.off('SIGINT',stop);
     await new Promise(r=>server.close(r));
-    s.tx(()=>{const lease=JSON.parse(s.get('runtime_lease','null'));if(lease?.owner===owner)s.set('runtime_lease','null');});
+    if(leader)await s.tx(async()=>{const lease=JSON.parse(await s.get('runtime_lease','null'));if(lease?.owner===owner)await s.set('runtime_lease','null');});
   }
 }
