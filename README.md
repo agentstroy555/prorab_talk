@@ -1,4 +1,4 @@
-# Прораб Talk + Parabtalk — v0.3.4 (build 12)
+# Прораб Talk + Parabtalk — v0.3.5 (build 13)
 
 Мобильный voice-first прототип Agent Stroy для создания заявки на стройматериалы.
 
@@ -36,14 +36,14 @@ npm run dev
 
 ## Render
 
-Для существующего Render service: [инструкция web + Telegram](docs/RENDER.md). По умолчанию TELEGRAM_ENABLED=false сохраняет web-only запуск.
+Для существующего Render service: [инструкция web + Telegram](docs/RENDER.md). Токен TELEGRAM_BOT_TOKEN автоматически включает бота. Без токена работает сайт; TELEGRAM_ENABLED=false явно отключает бота.
 
-`render.yaml` описывает прежний free web baseline и PostgreSQL, без включённого бота. `DATABASE_URL` связывается с Blueprint-базой автоматически, `GROQ_API_KEY` вводится как secret environment variable.
+`render.yaml` описывает бесплатный Web Service. DATABASE_URL указывает на настроенную Neon; GROQ_API_KEY и TELEGRAM_BOT_TOKEN задаются в Environment. База Render и persistent disk не требуются.
 
 <!-- repair staging write check -->
 
 ## Telegram в том же сервисе
 
-`npm start` запускает один сервер для сайта и опционального бота. Каталог и parser общие; web-заявки остаются в PostgreSQL, Telegram-данные — SQLite на постоянном диске. Сметы между каналами автоматически не синхронизируются. Новых web UX функций этот релиз не добавляет.
+`npm start` запускает один сервер для сайта и опционального бота. Каталог и parser общие; web-заявки остаются в PostgreSQL, Telegram-данные — отдельная схема telegram в той же PostgreSQL/Neon. Webhook регистрируется автоматически; входящее сообщение может разбудить Render Free после сна. Сметы между каналами автоматически не синхронизируются. Новых web UX функций этот релиз не добавляет.
 
 Проверки из корня: `npm run check`, `npm test`, `npm run demo:telegram`. Подробности бота: [telegram/README.md](telegram/README.md). Токен задаётся в Render Environment; в публичных исходниках секрета нет.

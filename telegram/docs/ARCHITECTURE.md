@@ -1,3 +1,18 @@
+# Актуальная архитектура v0.3.5 build 13
+
+Production Render Free использует PostgresStore и схему telegram в Neon.
+Engine и STT/runtime ожидают асинхронные операции хранилища. SQLite остаётся
+локальным тестовым адаптером; она не хранит production-данные на Render.
+Webhook подтверждает приём только после commit; PostgreSQL advisory xact lock
+сериализует queue admission, бюджет и изменения черновиков через pooler.
+Общий lease допускает одного worker. При rolling deploy standby принимает
+webhook в общую очередь и ждёт освобождения/истечения lease.
+Render webhook автоматически регистрируется после открытия listener; секрет
+стабилен, вычисляется из токена, pending updates не сбрасываются.
+Web-таблицы остаются в public; web и bot не синхронизируют сами сметы.
+
+## История предыдущей реализации (SQLite, build 12)
+
 # Архитектура Telegram MVP
 
 ## Поток данных

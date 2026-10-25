@@ -39,7 +39,7 @@ export class Store {
   run(sql, ...params) { return this.db.prepare(sql).run(...params); }
   tx(fn) {
     this.db.exec('BEGIN IMMEDIATE');
-    try { const result = fn(); this.db.exec('COMMIT'); return result; }
+    try { const result = fn(); if(result?.then)return result.then(value=>{this.db.exec('COMMIT');return value;},error=>{this.db.exec('ROLLBACK');throw error;}); this.db.exec('COMMIT'); return result; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
   get(key, fallback = '') { return this.one('SELECT value FROM kv WHERE key=?', key)?.value ?? fallback; }
@@ -77,5 +77,8 @@ export class Store {
       this.run('INSERT INTO stt_attempts VALUES(?,?,?,?)', key, 'started', seconds, now);
     });
   }
+  claimInbox() { return this.tx(()=>{const e=this.one("SELECT * FROM inbox WHERE status='pending' ORDER BY id LIMIT 1");if(e)this.run("UPDATE inbox SET status='processing' WHERE id=?",e.id);return e;}); }
+  claimOutbox(now) { return this.tx(()=>{const e=this.one("SELECT * FROM outbox WHERE status='pending' AND next_at<=? ORDER BY id LIMIT 1",now);if(e)this.run("UPDATE outbox SET status='sending',attempts=attempts+1 WHERE id=?",e.id);return e;}); }
+  recover() { this.db.exec("UPDATE inbox SET status='pending' WHERE status='processing'; UPDATE outbox SET status='uncertain' WHERE status='sending';"); }
   close() { this.db.close(); }
 }

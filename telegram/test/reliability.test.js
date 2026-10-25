@@ -71,8 +71,8 @@ test('oversized streamed body is rejected, regardless of supplied size metadata'
 test('CSV fields prevent spreadsheet formula injection; JSON preserves exact original text',()=>{
   const e=exportDraft({id:1},[{id:2,raw_text:'=HYPERLINK("x")',parsed:'{}',status:'ready'}],{});assert.ok(e.csv.includes("'=HYPERLINK"));assert.equal(JSON.parse(e.json).items[0].text,'=HYPERLINK("x")');
 });
-test('single instance lease prevents competing workers from recovering same database',t=>{
-  const s=store(t);assert.equal(claimLease(s,'A',1000),true);assert.equal(claimLease(s,'B',1001),false);assert.equal(claimLease(s,'B',61001),true);
+test('single instance lease prevents competing workers from recovering same database',async t=>{
+  const s=store(t);assert.equal(await claimLease(s,'A',1000),true);assert.equal(await claimLease(s,'B',1001),false);assert.equal(await claimLease(s,'B',61001),true);
 });
 test('webhook authenticates before durable enqueue and deduplicates retries over HTTP',async t=>{
   const s=store(t),cfg={...c(),mode:'webhook',secret:'a'.repeat(24)},e=new Engine(s,cfg),server=makeServer(e,cfg);

@@ -45,26 +45,26 @@ export class Transcriber {
   constructor(store,c,{fetcher=fetch,now=Date.now,signal}={}){this.store=store;this.c=c;this.fetcher=fetcher;this.now=now;this.signal=signal;}
   async transcribe(bytes,seconds,attemptKey){
     const key=createHash('sha256').update(bytes).update(JSON.stringify(['groq','whisper-large-v3-turbo','ru',STT_PROMPT,0])).digest('hex');
-    const cached=this.store.one('SELECT text FROM stt_cache WHERE key=?',key);
+    const cached=await this.store.one('SELECT text FROM stt_cache WHERE key=?',key);
     if(cached)return cached.text;
-    this.store.reserve(attemptKey,seconds,this.c,this.now());
+    await this.store.reserve(attemptKey,seconds,this.c,this.now());
     try{
       const body=new FormData();body.append('file',new Blob([bytes],{type:'audio/ogg'}),'voice.ogg');
       for(const [k,v] of Object.entries({model:'whisper-large-v3-turbo',language:'ru',prompt:STT_PROMPT,temperature:'0',response_format:'json'}))body.append(k,v);
       const response=await this.fetcher('https://api.groq.com/openai/v1/audio/transcriptions',{method:'POST',body,headers:{Authorization:`Bearer ${this.c.groqKey}`},signal:this.signal?AbortSignal.any([this.signal,AbortSignal.timeout(this.c.requestTimeoutMs)]):AbortSignal.timeout(this.c.requestTimeoutMs),redirect:'error'});
       if(!response.ok){
         const retryAfter=Math.max(1,Math.min(86400,Number(response.headers.get('retry-after'))||60));
-        if(response.status===429)this.store.set('groq_cooldown',this.now()+retryAfter*1000);
+        if(response.status===429)await this.store.set('groq_cooldown',this.now()+retryAfter*1000);
         await response.body?.cancel();
         throw new RemoteError(response.status===429?'groq_rate_limit':'groq_error',{status:response.status,retryAfter});
       }
       const d=JSON.parse((await limitedBody(response,1_000_000)).toString());
       if(typeof d.text!=='string'||d.text.trim().length>12000)throw new RemoteError('invalid_transcript');
       const text=d.text.trim();
-      this.store.tx(()=>{this.store.run('INSERT OR REPLACE INTO stt_cache VALUES(?,?)',key,text);this.store.run("UPDATE stt_attempts SET status='complete' WHERE key=?",attemptKey);});
+      await this.store.tx(async()=>{await this.store.run('INSERT OR REPLACE INTO stt_cache VALUES(?,?)',key,text);await this.store.run("UPDATE stt_attempts SET status='complete' WHERE key=?",attemptKey);});
       return text;
     }catch(e){
-      this.store.run("UPDATE stt_attempts SET status='failed_or_uncertain' WHERE key=?",attemptKey);
+      await this.store.run("UPDATE stt_attempts SET status='failed_or_uncertain' WHERE key=?",attemptKey);
       if(e instanceof RemoteError)throw e;throw new RemoteError('groq_transport');
     }
   }

@@ -77,7 +77,7 @@ test('startup rejects an active webhook in polling mode, closes PostgreSQL and n
 });
 test('shutdown aborts Telegram transport and records uncertain Groq attempt without automatic retry',async()=>{
   const abort=new AbortController(),s=new Store();
-  const fetcher=async(_url,{signal})=>new Promise((resolve,reject)=>{signal.addEventListener('abort',()=>reject(new Error('aborted')),{once:true});});
+  const fetcher=async(_url,{signal})=>new Promise((resolve,reject)=>{if(signal.aborted)reject(new Error('aborted'));else signal.addEventListener('abort',()=>reject(new Error('aborted')),{once:true});});
   const tg=new Telegram('fake',{fetcher,signal:abort.signal});
   const transcriber=new Transcriber(s,{rpm:10,rpd:100,audioPerDay:1000,requestTimeoutMs:45000,groqKey:'fake'},{fetcher,signal:abort.signal});
   const call=tg.call('getUpdates'),stt=transcriber.transcribe(Buffer.from('OggS'),3,'shutdown');
@@ -86,8 +86,8 @@ test('shutdown aborts Telegram transport and records uncertain Groq attempt with
 });
 test('release metadata is consistent for web, bot and visible version; catalog is shared',()=>{
   const read=p=>JSON.parse(readFileSync(new URL('../'+p,import.meta.url)));
-  for(const p of ['app-version.json','public/app-version.json','telegram/app-version.json']){assert.equal(read(p).version,'0.3.4');assert.equal(read(p).build,12);}
-  assert.equal(read('package.json').version,'0.3.4');assert.equal(read('telegram/package.json').version,'0.3.4');
+  for(const p of ['app-version.json','public/app-version.json','telegram/app-version.json']){assert.equal(read(p).version,'0.3.5');assert.equal(read(p).build,13);}
+  assert.equal(read('package.json').version,'0.3.5');assert.equal(read('telegram/package.json').version,'0.3.5');
   assert.equal(existsSync(new URL('../telegram/src/bot-token.js',import.meta.url)),false);
 });
 
@@ -97,4 +97,56 @@ test('production entrypoint exits cleanly on missing database config rather than
   assert.equal(result.error?.code,1);
   assert.match(result.stderr,/Service startup\/runtime failed/);
   assert.doesNotMatch(result.stderr,/unsettled top-level await/);
+});
+
+test('Render automatically uses PostgreSQL and webhook without a disk or an enable flag',()=>{
+  const env={RENDER:'true',RENDER_EXTERNAL_URL:'https://prorab-talk.onrender.com',DATABASE_URL:'postgresql://localhost/test',TELEGRAM_BOT_TOKEN:'123456:FAKE_TOKEN_FOR_LOCAL_TESTS_ONLY',GROQ_API_KEY:'mock',BOT_MODE:'polling',DB_PATH:'/var/data/old.sqlite'};
+  const a=serviceConfig(env).telegram,b=serviceConfig(env).telegram;
+  assert.equal(a.storage,'postgres');assert.equal(a.mode,'webhook');
+  assert.equal(a.webhookUrl,'https://prorab-talk.onrender.com/telegram/webhook');
+  assert.match(a.secret,/^[a-f0-9]{64}$/);assert.equal(a.secret,b.secret);
+  assert.equal(serviceConfig({...env,TELEGRAM_ENABLED:'false'}).telegram,null);
+  assert.throws(()=>serviceConfig({...env,DATABASE_URL:''}),/DATABASE_URL/);
+});
+
+test('Render startup registers webhook automatically and keeps pending Telegram updates',async()=>{
+  const db=database(),methods=[],s=new Store();let controls;
+  const env={PORT:'0',RENDER:'true',RENDER_EXTERNAL_URL:'https://example.onrender.com',DATABASE_URL:'postgresql://unused/mock',TELEGRAM_BOT_TOKEN:'123456:FAKE_TOKEN_FOR_LOCAL_TESTS_ONLY',GROQ_API_KEY:'mock'};
+  const tg={call:async(method,payload)=>{methods.push({method,payload});return method==='getWebhookInfo'?{url:''}:true;}};
+  await startCombined({env,db,telegram:tg,storeFactory:async()=>s,onReady:c=>{controls=c;c.stop();}});
+  assert.ok(controls);assert.equal(db.closed,true);
+  const registration=methods.find(x=>x.method==='setWebhook');
+  assert.equal(registration.payload.url,'https://example.onrender.com/telegram/webhook');
+  assert.equal(registration.payload.drop_pending_updates,false);assert.equal(registration.payload.max_connections,1);
+  assert.deepEqual(registration.payload.allowed_updates,['message','callback_query']);
+  assert.equal(methods.some(x=>x.method==='getUpdates'),false);
+});
+
+test('failed automatic registration closes the server and preserves durable queued data',async()=>{
+  const db=database(),s=new Store();let port;
+  const env={PORT:'0',RENDER:'true',RENDER_EXTERNAL_URL:'https://example.onrender.com',DATABASE_URL:'postgresql://unused/mock',TELEGRAM_BOT_TOKEN:'123456:FAKE_TOKEN_FOR_LOCAL_TESTS_ONLY',GROQ_API_KEY:'mock'};
+  const tg={call:async method=>{if(method==='setWebhook')throw new Error('registration failed');return method==='getWebhookInfo'?{url:''}:true;}};
+  await assert.rejects(startCombined({env,db,telegram:tg,storeFactory:async()=>s,onReady:c=>{port=c.server.address().port;}}),/registration failed/);
+  assert.equal(port,undefined);assert.equal(db.closed,true);
+});
+
+test('webhook never acknowledges an update before its durable enqueue finishes',async()=>{
+  const {makeServer}=await import('../telegram/src/runtime.js');
+  let release;const committed=new Promise(r=>{release=r;});
+  const server=makeServer({enqueue:async()=>committed},{mode:'webhook',secret:'z'.repeat(24)});
+  await new Promise(r=>server.listen(0,'127.0.0.1',r));
+  try{
+    let responded=false;
+    const request=fetch(`http://127.0.0.1:${server.address().port}/telegram/webhook`,{method:'POST',headers:{'x-telegram-bot-api-secret-token':'z'.repeat(24)},body:JSON.stringify({update_id:1})}).then(r=>{responded=true;return r;});
+    await new Promise(r=>setTimeout(r,25));assert.equal(responded,false);
+    release();assert.equal((await request).status,200);
+  }finally{release();await new Promise(r=>server.close(r));}
+});
+
+test('webhook database failure returns 503 so Telegram can redeliver the update',async()=>{
+  const {makeServer}=await import('../telegram/src/runtime.js');
+  const server=makeServer({enqueue:async()=>{throw new Error('database unavailable');}},{mode:'webhook',secret:'z'.repeat(24)});
+  await new Promise(r=>server.listen(0,'127.0.0.1',r));
+  try{const r=await fetch(`http://127.0.0.1:${server.address().port}/telegram/webhook`,{method:'POST',headers:{'x-telegram-bot-api-secret-token':'z'.repeat(24)},body:'{"update_id":1}'});assert.equal(r.status,503);}
+  finally{await new Promise(r=>server.close(r));}
 });
